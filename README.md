@@ -1,115 +1,91 @@
-# barnaby-face
+# Barnaby
 
-Barnaby's face. TypeScript → Canvas 2D, rendered at 480×480 on a 2.1″ round IPS
-panel over micro HDMI.
+Barnaby is a companion robot project that splits the system into a lightweight face interface, a Pi-based orchestration layer, and a future body-control module for the robot's physical motion and lighting. The goal is to keep the robot expressive and responsive while offloading heavier compute to a more capable machine.
 
-The face is a **pure view**. It owns no policy — the orchestrator decides that a
-fault outranks a mood, that sleep follows idle, when to look at someone. This
-draws what it's told, and keeps drawing when it's told nothing.
+At a high level:
 
-```bash
-npm install
-npm run dev          # http://localhost:5273  — dev tools on automatically
-npm run check:fit    # geometry regression — must pass before build
-npm run build        # → dist/, ~8 kB JS
+- The face is a browser-based front-end built with TypeScript and runs on a small round display.
+- The orchestrator is a Python service that manages wake-word detection, speech pipeline, tier routing, and communication with the face.
+- The body-control layer will handle head movement, body lighting, and other physical behaviors once the remaining hardware parts are assembled.
+- The robot form and physical concept are explored in design documents and an interactive 3D mockup.
+
+## High-level architecture
+
+The system is designed around a split between the local robot hardware and the more capable host machine:
+
+- The Pi handles local audio capture, wake-word detection, websocket coordination, and device control.
+- The Mac or other host machine runs inference-heavy tasks such as transcription, LLM response generation, and TTS streaming.
+- The face app renders Barnaby's expression and receives state updates over a websocket.
+- The body-control module is the next major hardware-facing layer: it will manage head motion, lighting states, and other physical motion effects as the robot body comes together.
+
+This keeps the robot’s display and personality responsive while allowing the intelligence layer to remain flexible and powerful, and it leaves a clear path for the mechanical system to grow into a complete embodied companion.
+
+## Project structure
+
+```text
+barnaby/
+├── README.md                     # project overview
+├── DESIGN.md                     # high-level robot design and system thinking
+├── PARTS.md                      # mechanical and fabrication notes
+├── docs/
+│   └── companion-robot-3d.html  # interactive concept model of the robot form
+├── face/                         # browser-based face application
+│   ├── README.md                 # build/run instructions for the face UI
+│   ├── package.json
+│   ├── src/
+│   └── ...
+├── orchestrator/                  # Python runtime for the robot brain
+│   ├── README.md                 # setup and execution guide for the orchestrator
+│   ├── pyproject.toml
+│   ├── config.yaml
+│   ├── __main__.py
+│   └── ...
+├── body-control/                 # planned module for head motion, body lighting, and motion logic
+│   └── (to be implemented)
+└── .gitignore
 ```
 
-Dev tools are on by default under `npm run dev` and stripped from a production
-build. **Move your pointer** and Barnaby's eyes follow it — that's what the face
-tracker will drive. Number keys `1`–`0` switch states. A body-glow swatch shows
-the colour the ESP32 would be sent.
+## Components
 
-`?dev=0` previews exactly what the kiosk shows: no panel, no cursor.
+### Face UI
 
-## The panel constraint
+The face app is the visual layer of the robot. It renders Barnaby’s state, gaze, mood, alert conditions, and body glow as a compact, kiosk-friendly interface.
 
-The active area is a **53 mm circle — 26.5 mm of usable radius**. Anything
-beyond that is physically not there. All geometry is authored in millimetres in
-`src/layout.ts` and `src/expressions.ts`, and `MM` converts to pixels.
+See:
+- [face/README.md](face/README.md)
 
-`npm run check:fit` samples the **actual drawn outline** — rounded-corner arcs
-on the eyes, rotated brow corners, worst-case idle drift and tracked gaze
-pushing the same direction at once — and fails if anything exceeds the radius.
-This is not decorative. Two expressions were silently clipping before it
-existed, and a bounding-box approximation of the "happy" arc was wrong by
-several millimetres. **Run it after any layout edit.**
+### Orchestrator
 
-Idle drift and tracked gaze are **clamped as a combined offset** (`maxDX`,
-`maxDY`) rather than summed. Without that cap the two stack, the worst case eats
-the margin, and gaze has to be timid to stay safe. Clamping lets gaze be
-generous while the geometry stays guaranteed.
+The orchestrator is the control system that ties together wake-word detection, microphone input, speech processing, wake-word routing, and message delivery to the face.
 
-Current worst case: `surprise` at 25.2 mm, 1.3 mm of margin.
+See:
+- [orchestrator/README.md](orchestrator/README.md)
 
-## Protocol
+### Body control
 
-WebSocket to the orchestrator, default `ws://<host>:8711/face`. Override with
-`?ws=`. Every message is validated at runtime — a typo upstream logs a warning
-and is ignored, never throws.
+The body-control layer is the major unfinished component of the system. Once the remaining body parts and electronics are assembled, this module will coordinate head movement, body lighting, servo control, and physical state changes in response to the orchestrator and face state.
 
-```jsonc
-{ "type": "state", "name": "listening" }   // any key of STATES
-{ "type": "look",  "x": -0.4, "y": 0.2 }   // -1..1, from the face tracker
-```
+This module is intentionally represented as a planned extension rather than a completed implementation, because the mechanical and electrical kit is still being assembled and integrated. In the finished system, it will sit alongside the face and orchestrator as the hardware-facing motion and lighting controller.
 
-On disconnect the face **keeps its last state and keeps blinking**, reconnecting
-with backoff to 5 s. An orchestrator restart must not blank Barnaby's face.
+## Interactive robot design page
 
-## States
+The concept art and form exploration are available in an interactive virtual page that lets you inspect the recessed vs. exposed head variations and adjust the motion model.
 
-Six moods — `neutral` `happy` `curious` `surprise` `listening` `sleepy` — plus
-`boot` and three faults.
+Open the interactive design page here:
+- [docs/companion-robot-3d.html](docs/companion-robot-3d.html)
 
-**Faults override mood.** `offline`, `haDown` and `muted` are not moods and must
-not be maskable by one; a fault indicator a good mood can hide is useless.
-`muted` is deliberately unmistakable: eyes shut, no drift, no glow. It's a
-privacy indicator, not an expression.
+This is a useful reference when evaluating the physical structure, proportions, and head mechanism before committing to fabrication or control work.
 
-## Body glow
+## Design references
 
-`STATES[name].glow` is the **single source of truth** for the LED ring colour.
-The orchestrator reads it here and forwards it to the ESP32, so the ring and the
-face can never disagree about Barnaby's mood.
+- [DESIGN.md](DESIGN.md) — design narrative and overall product direction.
+- [PARTS.md](PARTS.md) — part-level and fabrication notes.
 
-## Shape swaps hide inside a blink
+## Build and run
 
-Eye shapes can't be interpolated — a rounded rect can't morph into an arc. So
-changing expression triggers a blink and swaps the geometry at the midpoint,
-while the eyes are shut. Same cut-hiding trick animators use. Everything else
-(brow height, tilt, asymmetry, gaze scale) interpolates normally.
+For the detailed local setup, execution, and deployment steps, follow the component-specific documentation:
 
-## Deploying to the Pi
+1. Face application: [face/README.md](face/README.md)
+2. Robot orchestrator: [orchestrator/README.md](orchestrator/README.md)
 
-Serve `dist/` locally and point a kiosk browser at it.
-
-```bash
-npm run build
-rsync -a dist/ barnaby.local:/opt/barnaby/face/
-```
-
-Use **`cog`** (WPE WebKit) rather than Chromium — it's a real embedded runtime
-with no desktop, no tab bar, and a much smaller footprint on an appliance:
-
-```bash
-sudo apt install cog
-cog --set-fullscreen=true http://127.0.0.1:8080/
-```
-
-Two things to get right on the Pi:
-
-- **Kill the boot console on this output**, or Barnaby spends his first 30
-  seconds displaying kernel messages. Add `console=tty3 quiet logo.nologo
-  vt.global_cursor_default=0` to `cmdline.txt`.
-- **480×480 is a non-standard mode.** Expect to set it explicitly, e.g.
-  `video=HDMI-A-1:480x480@60` in `cmdline.txt`.
-
-## Layout
-
-```
-src/expressions.ts   state table + eye geometry. Edit expressions here.
-src/layout.ts        shared mm constants. Edit proportions here.
-src/face.ts          canvas renderer, blink and drift timing.
-src/transport.ts     websocket + runtime validation.
-src/main.ts          wiring + dev panel.
-scripts/check-fit.ts geometry regression check.
-```
+Together, these two documents describe how to install dependencies, start each service, and wire the face to the orchestrator.

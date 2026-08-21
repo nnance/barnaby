@@ -1,0 +1,48 @@
+# Barnaby orchestrator. Runs on the Pi.
+
+audio:
+  # `python -m barnaby --devices` to find these. Match the ReSpeaker XVF3800.
+  input_device: null
+  output_device: null
+  preroll_ms: 500        # prepended on wake so the first word isn't clipped
+  hangover_ms: 350       # silence before we call it done — the latency knob
+  min_speech_ms: 250
+  barge_in_ms: 200       # only trustworthy because the array does hardware AEC
+
+wake:
+  model: models/barnaby.onnx
+  threshold: 0.5         # raise if the TV triggers it
+
+mac:
+  # Rapid-MLX serves ONE model per instance, so three ports.
+  #   rapid-mlx serve whisper-large-v3-turbo --port 8000
+  #   rapid-mlx serve qwen3.8-27b-4bit       --port 8001
+  #   rapid-mlx serve kokoro                 --port 8002
+  asr_url: http://mac.local:8000/v1
+  asr_model: whisper-large-v3-turbo
+  llm_url: http://mac.local:8001/v1
+  llm_model: qwen3.8-27b-4bit
+  tts_url: http://mac.local:8002/v1
+  tts_model: kokoro
+  tts_voice: af_heart
+  max_tokens: 400
+  temperature: 0.4
+
+home_assistant:
+  enabled: true
+  base_url: http://homeassistant.local:8123
+  token: ${HA_TOKEN}
+  agent_id: conversation.home_assistant
+  area: Kitchen
+
+face:
+  host: 0.0.0.0
+  port: 8711
+
+behaviour:
+  chirp_on_device_command: true   # beep to acknowledge, speak to inform
+  sleep_after_frames: 2250        # ~3 min of nothing -> sleepy
+
+targets:
+  device_command_ms: 700
+  spoken_answer_ms: 2000

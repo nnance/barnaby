@@ -1,0 +1,421 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Companion robot — recessed vs exposed head</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#16191d; --panel:#1e2228; --panel2:#252a31; --rule:#2f353d;
+    --chalk:#e8e6e1; --dim:#8a8f97; --dimmer:#5d636b;
+    --amber:#e8a33d; --red:#d4674a;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --disp:"Space Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--chalk);font-family:var(--disp);overflow:hidden}
+  #stage{position:fixed;inset:0}
+  canvas{display:block}
+
+  #head{position:fixed;top:0;left:0;padding:20px 24px;pointer-events:none;z-index:2;max-width:46%}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer)}
+  h1{font-size:19px;font-weight:500;margin:6px 0 0;letter-spacing:-.01em}
+  .specs{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:6px}
+  .specs b{color:var(--chalk);font-weight:500}
+
+  #panel{position:fixed;z-index:3;right:24px;top:50%;transform:translateY(-50%);
+    width:274px;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px}
+  .ptitle{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer);margin-bottom:12px}
+
+  .seg{display:flex;background:var(--panel2);border:1px solid var(--rule);border-radius:7px;padding:3px;margin-bottom:16px}
+  .seg button{flex:1;border:0;background:transparent;border-radius:5px;padding:7px 4px;
+    font-family:var(--mono);font-size:11px;color:var(--dim);cursor:pointer;transition:background .15s,color .15s}
+  .seg button[aria-pressed=true]{background:var(--chalk);color:var(--ink)}
+
+  .axis{padding:11px 0;border-top:1px solid var(--rule)}
+  .arow{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px}
+  .aname{font-size:13px;font-weight:500}
+  .aname span{font-family:var(--mono);font-size:10px;color:var(--dimmer);margin-left:7px;letter-spacing:.06em}
+  .aval{font-family:var(--mono);font-size:13px;color:var(--dim);transition:color .18s}
+  .axis.live .aval{color:var(--amber)}
+  .axis.clash .aval{color:var(--red)}
+  .arange{font-family:var(--mono);font-size:10px;color:var(--dimmer);margin-top:5px}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;cursor:grab;margin:0}
+  input[type=range]:active{cursor:grabbing}
+  input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--rule)}
+  input[type=range]::-moz-range-track{height:2px;background:var(--rule)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+    background:var(--chalk);margin-top:-5.5px;border:0}
+  input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:var(--chalk);border:0}
+  input[type=range]:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+
+  #warn{font-family:var(--mono);font-size:10.5px;line-height:1.5;color:var(--red);
+    margin-top:10px;min-height:29px;opacity:0;transition:opacity .2s}
+  #warn.on{opacity:1}
+
+  .tools{display:flex;gap:8px;margin-top:6px;padding-top:14px;border-top:1px solid var(--rule)}
+  .tools button{flex:1;font-family:var(--mono);font-size:11px;color:var(--dim);
+    background:var(--panel2);border:1px solid var(--rule);border-radius:6px;padding:8px 4px;cursor:pointer;
+    transition:color .15s,border-color .15s}
+  .tools button:hover{color:var(--chalk);border-color:var(--dimmer)}
+  .tools button[aria-pressed=true]{color:var(--ink);background:var(--amber);border-color:var(--amber)}
+  button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+
+  #key{position:fixed;left:24px;bottom:20px;z-index:2;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+  #key div{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .sw{width:9px;height:9px;border-radius:2px;flex:none}
+  #hint{position:fixed;right:320px;bottom:20px;z-index:2;font-family:var(--mono);font-size:10.5px;color:var(--dimmer)}
+
+  @media (max-width:900px){
+    #panel{right:12px;left:12px;width:auto;top:auto;bottom:12px;transform:none;padding:13px}
+    .axis{padding:8px 0}
+    #key,#hint{display:none}
+    #head{padding:14px 16px;max-width:100%}
+  }
+</style>
+
+<div id="stage"></div>
+
+<div id="head">
+  <div class="eyebrow" id="eyebrow">Recessed — head sits in a socket</div>
+  <h1>Companion robot — head mechanism</h1>
+  <div class="specs" id="specs">3 DOF &middot; <b>200</b> mm tall &middot; <b>192</b> mm base &middot; <b>120</b> mm head</div>
+</div>
+
+<div id="panel">
+  <div class="ptitle">Body form</div>
+  <div class="seg">
+    <button id="m-rec" aria-pressed="true">Recessed</button>
+    <button id="m-exp" aria-pressed="false">Exposed</button>
+  </div>
+
+  <div class="ptitle">Drive the joints</div>
+
+  <div class="axis" id="ax-yaw">
+    <div class="arow"><div class="aname">Yaw <span>J0</span></div><div class="aval" id="v-yaw">0°</div></div>
+    <input type="range" id="s-yaw" min="-175" max="175" value="0" step="1" aria-label="Yaw angle">
+    <div class="arange">±175° &middot; turntable, fully internal</div>
+  </div>
+
+  <div class="axis" id="ax-pitch">
+    <div class="arow"><div class="aname">Pitch <span>J1</span></div><div class="aval" id="v-pitch">0°</div></div>
+    <input type="range" id="s-pitch" min="-25" max="40" value="0" step="1" aria-label="Pitch angle">
+    <div class="arange">−25° to +40° &middot; belt-driven from below</div>
+  </div>
+
+  <div class="axis" id="ax-roll">
+    <div class="arow"><div class="aname">Roll <span>J2</span></div><div class="aval" id="v-roll">0°</div></div>
+    <input type="range" id="s-roll" min="-32" max="32" value="0" step="1" aria-label="Roll angle">
+    <div class="arange">±32° &middot; servo lives inside the head</div>
+  </div>
+
+  <div id="warn"></div>
+
+  <div class="tools">
+    <button id="b-sweep">Sweep</button>
+    <button id="b-ghost" aria-pressed="false">X-ray</button>
+    <button id="b-reset">Reset</button>
+  </div>
+</div>
+
+<div id="key">
+  <div><span class="sw" style="background:#e8e6e1"></span>Printed shell — matte PLA</div>
+  <div><span class="sw" style="background:#3e8c7e"></span>Yoke, posts, platter — PETG</div>
+  <div><span class="sw" style="background:#3a4048"></span>STS3215 servos</div>
+  <div><span class="sw" style="background:#e8a33d"></span>Brow band — camera and LEDs</div>
+</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const D = THREE.MathUtils.degToRad, V2 = THREE.Vector2, V3 = THREE.Vector3;
+const stage = document.getElementById('stage');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x16191d);
+scene.fog = new THREE.Fog(0x16191d, 900, 1900);
+const camera = new THREE.PerspectiveCamera(34, 1, 1, 4000);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+stage.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0x9fb6c8, 0x14171b, 0.62));
+const keyL = new THREE.DirectionalLight(0xffffff, 1.5);
+keyL.position.set(320, 470, 380); keyL.castShadow = true;
+keyL.shadow.mapSize.set(2048, 2048);
+keyL.shadow.camera.near = 100; keyL.shadow.camera.far = 1400;
+keyL.shadow.camera.left = -320; keyL.shadow.camera.right = 320;
+keyL.shadow.camera.top = 430; keyL.shadow.camera.bottom = -60;
+keyL.shadow.bias = -0.0012; scene.add(keyL);
+const fillL = new THREE.DirectionalLight(0x8fa8c4, 0.5); fillL.position.set(-400, 180, -260); scene.add(fillL);
+const rimL = new THREE.DirectionalLight(0xffd9a0, 0.42); rimL.position.set(-120, 300, -420); scene.add(rimL);
+
+const M = {
+  shell:  new THREE.MeshStandardMaterial({color:0xe8e6e1, roughness:0.88, metalness:0.02, side:THREE.DoubleSide}),
+  head:   new THREE.MeshStandardMaterial({color:0xe8e6e1, roughness:0.88, metalness:0.02}),
+  mech:   new THREE.MeshStandardMaterial({color:0x3e8c7e, roughness:0.55, metalness:0.12}),
+  servo:  new THREE.MeshStandardMaterial({color:0x3a4048, roughness:0.62, metalness:0.18}),
+  dark:   new THREE.MeshStandardMaterial({color:0x1a1d21, roughness:0.3,  metalness:0.35}),
+  metal:  new THREE.MeshStandardMaterial({color:0x9aa2ab, roughness:0.34, metalness:0.85}),
+  rubber: new THREE.MeshStandardMaterial({color:0x24282d, roughness:0.96}),
+  board:  new THREE.MeshStandardMaterial({color:0x1d5c46, roughness:0.72}),
+  ballast:new THREE.MeshStandardMaterial({color:0x555b62, roughness:0.5, metalness:0.6}),
+  belt:   new THREE.MeshStandardMaterial({color:0x2a2e33, roughness:0.9}),
+  led:    new THREE.MeshStandardMaterial({color:0x3a2c14, emissive:0xe8a33d, emissiveIntensity:1.5, roughness:0.5})
+};
+function mesh(g, m, x=0, y=0, z=0){
+  const o = new THREE.Mesh(g, m); o.position.set(x,y,z); o.castShadow = true; o.receiveShadow = true; return o;
+}
+
+/* ground */
+const gcv = document.createElement('canvas'); gcv.width = gcv.height = 512;
+const gx = gcv.getContext('2d');
+const grd = gx.createRadialGradient(256,256,10, 256,256,256);
+grd.addColorStop(0,'#272c33'); grd.addColorStop(0.55,'#1c2026'); grd.addColorStop(1,'#16191d');
+gx.fillStyle = grd; gx.fillRect(0,0,512,512);
+const ground = new THREE.Mesh(new THREE.CircleGeometry(560, 96),
+  new THREE.MeshStandardMaterial({map:new THREE.CanvasTexture(gcv), roughness:1}));
+ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
+const bench = new THREE.Mesh(new THREE.TorusGeometry(300, 0.6, 6, 128), new THREE.MeshBasicMaterial({color:0x2f353d}));
+bench.rotation.x = Math.PI/2; bench.position.y = 0.4; scene.add(bench);
+
+const robot = new THREE.Group(); scene.add(robot);
+
+/* ---------- body A: recessed socket (lathe profile) ---------- */
+const recBody = new THREE.Group(); robot.add(recBody);
+const prof = [
+  [0,0],[84,0],[93,15],[96,44],[94,72],[88,100],[79,124],[70,141],[64,147],
+  [59,145],[62,136],[70,124],[80,106],[86,80],[88,50],[84,12],[0,10]
+].map(p => new V2(p[0], p[1]));
+const socket = mesh(new THREE.LatheGeometry(prof, 96), M.shell);
+recBody.add(socket);
+const rimTrim = mesh(new THREE.TorusGeometry(61.5, 3, 10, 84), M.shell, 0, 146);
+rimTrim.rotation.x = Math.PI/2; recBody.add(rimTrim);
+for (let i=0;i<4;i++){ const a=D(45+i*90); recBody.add(mesh(new THREE.CylinderGeometry(9,9,7,20), M.rubber, Math.cos(a)*64, 3.5, Math.sin(a)*64)); }
+for (let i=0;i<22;i++){ const a=D(i*360/22); recBody.add(mesh(new THREE.BoxGeometry(3,2.5,9), M.dark, Math.cos(a)*90, 14, Math.sin(a)*90).rotateY(-a)); }
+
+/* ---------- body B: exposed pedestal ---------- */
+const expBody = new THREE.Group(); robot.add(expBody); expBody.visible = false;
+expBody.add(mesh(new THREE.CylinderGeometry(78, 85, 150, 72, 1, true), M.shell, 0, 75));
+expBody.add(mesh(new THREE.CircleGeometry(85, 72).rotateX(-Math.PI/2), M.shell, 0, 0.5));
+const shoulder = mesh(new THREE.TorusGeometry(78, 5, 12, 72), M.shell, 0, 150);
+shoulder.rotation.x = Math.PI/2; expBody.add(shoulder);
+for (let i=0;i<4;i++){ const a=D(45+i*90); expBody.add(mesh(new THREE.CylinderGeometry(9,9,7,20), M.rubber, Math.cos(a)*62, 3.5, Math.sin(a)*62)); }
+
+/* ---------- internals ---------- */
+const internals = new THREE.Group(); robot.add(internals); internals.visible = false;
+const ballast = mesh(new THREE.TorusGeometry(62, 14, 12, 48), M.ballast, 0, 22);
+ballast.rotation.x = Math.PI/2; internals.add(ballast);
+internals.add(mesh(new THREE.BoxGeometry(85, 16, 56), M.board, 0, 46, -4));
+internals.add(mesh(new THREE.BoxGeometry(40, 10, 40), M.servo, 0, 62, -4));
+const spk = mesh(new THREE.CylinderGeometry(23, 23, 16, 32), M.dark, 0, 44, 52);
+spk.rotation.x = Math.PI/2; internals.add(spk);
+internals.add(mesh(new THREE.BoxGeometry(20, 41, 40), M.servo, 62, 40, 0));   // yaw servo
+internals.add(mesh(new THREE.BoxGeometry(20, 41, 40), M.servo, -62, 96, 0));  // pitch servo
+const mics = mesh(new THREE.CylinderGeometry(34, 34, 6, 40), M.board, 0, 120, 0); internals.add(mics);
+
+/* ---------- J0 yaw ---------- */
+const yawG = new THREE.Group(); robot.add(yawG);
+yawG.add(mesh(new THREE.CylinderGeometry(74, 70, 12, 64), M.mech, 0, 6));
+const yawBrg = mesh(new THREE.TorusGeometry(34, 4, 10, 44), M.metal, 0, 0);
+yawBrg.rotation.x = Math.PI/2; yawG.add(yawBrg);
+[-70, 70].forEach(x => yawG.add(mesh(new THREE.BoxGeometry(14, 66, 20), M.mech, x, 45)));
+const pulley = mesh(new THREE.CylinderGeometry(17, 17, 8, 28).rotateZ(Math.PI/2), M.mech, -70, 76);
+yawG.add(pulley);
+const belt = mesh(new THREE.BoxGeometry(4, 40, 30), M.belt, -70, 56); yawG.add(belt);
+
+/* ---------- J1 pitch — rear yoke, no full ring ---------- */
+const pitchG = new THREE.Group(); pitchG.position.y = 76; yawG.add(pitchG);
+function yokeArm(sx){
+  const c = new THREE.CatmullRomCurve3([
+    new V3(sx*70,0,2), new V3(sx*64,0,-28), new V3(sx*42,0,-54), new V3(sx*16,0,-65)
+  ]);
+  return mesh(new THREE.TubeGeometry(c, 40, 5.5, 12, false), M.mech);
+}
+pitchG.add(yokeArm(1)); pitchG.add(yokeArm(-1));
+pitchG.add(mesh(new THREE.BoxGeometry(38, 22, 16), M.mech, 0, 0, -66));
+[-70, 70].forEach(x => pitchG.add(mesh(new THREE.CylinderGeometry(6,6,12,18).rotateZ(Math.PI/2), M.metal, x, 0, 2)));
+pitchG.add(mesh(new THREE.CylinderGeometry(7,7,22,20).rotateX(Math.PI/2), M.metal, 0, 0, -58));
+
+/* ---------- J2 roll ---------- */
+const rollG = new THREE.Group(); pitchG.add(rollG);
+rollG.add(mesh(new THREE.SphereGeometry(60, 72, 48), M.head));
+const rollServo = mesh(new THREE.BoxGeometry(20, 41, 40), M.servo, 0, 0, -26);
+rollServo.visible = false; rollG.add(rollServo); internals.add(new THREE.Object3D());
+
+const face = new THREE.Group(); rollG.add(face);
+const visor = mesh(new THREE.SphereGeometry(60.8, 72, 48, D(-54), D(108), D(60), D(42)), M.dark);
+visor.rotation.y = Math.PI/2; face.add(visor);
+face.add(mesh(new THREE.TorusGeometry(23, 4, 12, 52), M.led, 0, 0, 54));
+face.add(mesh(new THREE.CylinderGeometry(7.5,7.5,5,26).rotateX(Math.PI/2), M.dark, 0, 0, 56));
+face.add(mesh(new THREE.CylinderGeometry(4.8,4.8,3,26).rotateX(Math.PI/2), M.metal, 0, 0, 58.5));
+const glow = new THREE.PointLight(0xe8a33d, 0.8, 240); glow.position.set(0,0,66); face.add(glow);
+
+/* ---------- modes ---------- */
+const ALLBODIES = [recBody, expBody];
+const MODES = {
+  rec: {yawY:64, faceTilt:-45, show:recBody, rim:146,
+        eyebrow:'Recessed — head sits in a socket',
+        specs:'3 DOF &middot; <b>200</b> mm tall &middot; <b>192</b> mm base &middot; <b>120</b> mm head'},
+  exp: {yawY:150, faceTilt:0, show:expBody, rim:null,
+        eyebrow:'Exposed — head floats on posts',
+        specs:'3 DOF &middot; <b>286</b> mm tall &middot; <b>170</b> mm base &middot; <b>120</b> mm head'}
+};
+let mode = 'rec';
+function setMode(k){
+  mode = k; const m = MODES[k];
+  ALLBODIES.forEach(b => b.visible = (b === m.show));
+  yawG.position.y = m.yawY;
+  face.rotation.x = D(m.faceTilt);
+  ['rec','exp'].forEach(id => document.getElementById('m-'+id).setAttribute('aria-pressed', id===k));
+  document.getElementById('eyebrow').textContent = m.eyebrow;
+  document.getElementById('specs').innerHTML = m.specs;
+  if (ghost) applyGhost();
+  apply();
+}
+
+/* ---------- state ---------- */
+const S = {yaw:0, pitch:0, roll:0};
+const active = {yaw:0, pitch:0, roll:0};
+const yokeTip = new V3();
+
+function apply(){
+  yawG.rotation.y = D(S.yaw);
+  pitchG.rotation.x = D(-S.pitch);
+  rollG.rotation.z = D(S.roll);
+  for (const k of ['yaw','pitch','roll']){
+    document.getElementById('v-'+k).textContent = (S[k]>0?'+':'') + Math.round(S[k]) + '°';
+    document.getElementById('s-'+k).value = S[k];
+  }
+  checkClash();
+}
+
+/* does the yoke break the socket rim? */
+function checkClash(){
+  const w = document.getElementById('warn');
+  const ap = document.getElementById('ax-pitch');
+  if (mode !== 'rec'){ w.classList.remove('on'); ap.classList.remove('clash'); return; }
+  robot.updateMatrixWorld(true);
+  yokeTip.set(0, 0, -66); pitchG.localToWorld(yokeTip);
+  const above = yokeTip.y - MODES.rec.rim;
+  const on = above > -2;
+  w.classList.toggle('on', on);
+  ap.classList.toggle('clash', on);
+  if (on) w.textContent = 'Yoke arms clear the rim by ' + Math.round(above+2) +
+    ' mm — visible behind the head at this pitch.';
+}
+
+const arcsLive = {yaw:'ax-yaw', pitch:'ax-pitch', roll:'ax-roll'};
+function fade(dt){
+  for (const k in active){
+    active[k] = Math.max(0, active[k] - dt*1.6);
+    document.getElementById(arcsLive[k]).classList.toggle('live', active[k] > 0.05);
+  }
+}
+
+['yaw','pitch','roll'].forEach(k => {
+  document.getElementById('s-'+k).addEventListener('input', e => {
+    S[k] = +e.target.value; active[k] = 1; sweeping = false;
+    document.getElementById('b-sweep').textContent = 'Sweep'; apply();
+  });
+});
+document.getElementById('m-rec').addEventListener('click', () => setMode('rec'));
+document.getElementById('m-exp').addEventListener('click', () => setMode('exp'));
+
+/* ---------- sweep ---------- */
+let sweeping = false, t0 = 0;
+const LEG = 2.5;
+const legs = [
+  {k:'yaw',from:0,to:-175},{k:'yaw',from:-175,to:175},{k:'yaw',from:175,to:0},
+  {k:'pitch',from:0,to:40},{k:'pitch',from:40,to:-25},{k:'pitch',from:-25,to:0},
+  {k:'roll',from:0,to:32},{k:'roll',from:32,to:-32},{k:'roll',from:-32,to:0}
+];
+const ease = t => t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+document.getElementById('b-sweep').addEventListener('click', e => {
+  sweeping = !sweeping; t0 = performance.now()/1000;
+  e.target.textContent = sweeping ? 'Stop' : 'Sweep';
+});
+function runSweep(now){
+  const t = (now - t0) % (legs.length*LEG);
+  const leg = legs[Math.floor(t/LEG)];
+  S.yaw = 0; S.pitch = 0; S.roll = 0;
+  S[leg.k] = leg.from + (leg.to-leg.from)*ease((t%LEG)/LEG);
+  active[leg.k] = 1; apply();
+}
+
+/* ---------- x-ray ---------- */
+let ghost = false;
+function applyGhost(){
+  [recBody, expBody].forEach(b => b.traverse(o => {
+    if (!o.isMesh) return;
+    o.material = o.material === M.shell ? M.shell.clone() : o.material;
+    o.material.transparent = ghost; o.material.opacity = ghost ? 0.15 : 1;
+    o.material.depthWrite = !ghost; o.castShadow = !ghost;
+  }));
+  const hm = rollG.children[0];
+  hm.material = M.head.clone();
+  hm.material.transparent = ghost; hm.material.opacity = ghost ? 0.2 : 1;
+  hm.material.depthWrite = !ghost;
+  rollServo.visible = ghost;
+  internals.visible = ghost;
+}
+document.getElementById('b-ghost').addEventListener('click', e => {
+  ghost = !ghost; e.target.setAttribute('aria-pressed', ghost); applyGhost();
+});
+
+/* ---------- orbit ---------- */
+const cam = {az:D(30), pol:D(76), dist:600, tgt:new V3(0,120,0)};
+const home = {az:cam.az, pol:cam.pol, dist:cam.dist};
+function updateCam(){
+  cam.pol = Math.max(D(14), Math.min(D(97), cam.pol));
+  cam.dist = Math.max(280, Math.min(1300, cam.dist));
+  camera.position.set(
+    cam.dist*Math.sin(cam.pol)*Math.sin(cam.az),
+    cam.tgt.y + cam.dist*Math.cos(cam.pol),
+    cam.dist*Math.sin(cam.pol)*Math.cos(cam.az));
+  camera.lookAt(cam.tgt);
+}
+document.getElementById('b-reset').addEventListener('click', () => {
+  Object.assign(cam, home); updateCam();
+  sweeping = false; document.getElementById('b-sweep').textContent = 'Sweep';
+  S.yaw = S.pitch = S.roll = 0; apply();
+});
+let drag = null, pinch = 0;
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => { drag = {x:e.clientX,y:e.clientY}; el.setPointerCapture(e.pointerId); });
+el.addEventListener('pointerup', () => drag = null);
+el.addEventListener('pointercancel', () => drag = null);
+el.addEventListener('pointermove', e => {
+  if (!drag) return;
+  cam.az -= (e.clientX-drag.x)*0.0068; cam.pol -= (e.clientY-drag.y)*0.0058;
+  drag = {x:e.clientX,y:e.clientY}; updateCam();
+});
+el.addEventListener('wheel', e => { e.preventDefault(); cam.dist *= 1 + e.deltaY*0.0011; updateCam(); }, {passive:false});
+el.addEventListener('touchmove', e => {
+  if (e.touches.length !== 2) return;
+  const d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+  if (pinch) { cam.dist *= pinch/d; updateCam(); }
+  pinch = d;
+}, {passive:true});
+el.addEventListener('touchend', () => pinch = 0);
+
+function resize(){ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); }
+addEventListener('resize', resize); resize(); updateCam(); setMode('rec');
+
+let last = performance.now()/1000;
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+(function loop(){
+  requestAnimationFrame(loop);
+  const now = performance.now()/1000, dt = Math.min(0.05, now-last); last = now;
+  if (sweeping) runSweep(now);
+  fade(dt);
+  M.led.emissiveIntensity = reduced ? 1.5 : 1.35 + Math.sin(now*1.4)*0.28;
+  renderer.render(scene, camera);
+})();
+</script>

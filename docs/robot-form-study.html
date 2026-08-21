@@ -1,0 +1,416 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Barnaby — form study</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#191614;--panel:#231f1c;--panel2:#2b2622;--rule:#3a3430;
+    --chalk:#f0ebe3;--dim:#9a9088;--dimmer:#6b625b;--amber:#e8a33d;--cyan:#7fd4e8;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --disp:"Space Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--chalk);font-family:var(--disp);overflow:hidden}
+  #stage{position:fixed;inset:0}
+  canvas{display:block}
+  #head{position:fixed;top:0;left:0;padding:20px 24px;pointer-events:none;z-index:2;max-width:40%}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer)}
+  h1{font-size:34px;font-weight:700;margin:5px 0 0;letter-spacing:-.025em}
+  .wake{font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin:7px 0 0;letter-spacing:.04em}
+  .wake span{color:var(--cyan)}
+  .sub{font-size:13px;color:var(--dim);margin-top:8px;line-height:1.5}
+
+  #panel{position:fixed;z-index:3;right:22px;top:50%;transform:translateY(-50%);
+    width:258px;background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:15px}
+  .ptitle{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer);margin:0 0 9px}
+  .ptitle.sp{margin-top:15px}
+  .seg{display:flex;background:var(--panel2);border:1px solid var(--rule);border-radius:8px;padding:3px}
+  .seg button{flex:1;border:0;background:transparent;border-radius:6px;padding:8px 4px;
+    font-family:var(--mono);font-size:11px;color:var(--dim);cursor:pointer;transition:background .18s,color .18s}
+  .seg button[aria-pressed=true]{background:var(--chalk);color:var(--ink)}
+  .note{font-size:11px;line-height:1.5;color:var(--dimmer);margin:8px 0 0}
+  .note b{color:var(--dim);font-weight:500}
+
+  .exgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+  .exgrid button{border:1px solid var(--rule);background:var(--panel2);border-radius:7px;padding:8px 2px;
+    font-family:var(--mono);font-size:10.5px;color:var(--dim);cursor:pointer;transition:all .15s}
+  .exgrid button:hover{color:var(--chalk);border-color:var(--dimmer)}
+  .exgrid button[aria-pressed=true]{background:var(--cyan);border-color:var(--cyan);color:#10262c}
+
+  .axis{padding:7px 0;border-top:1px solid var(--rule)}
+  .arow{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:3px}
+  .aname{font-size:12.5px;font-weight:500}
+  .aval{font-family:var(--mono);font-size:12px;color:var(--dim)}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:20px;background:transparent;cursor:grab;margin:0}
+  input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--rule)}
+  input[type=range]::-moz-range-track{height:2px;background:var(--rule)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--chalk);margin-top:-5px;border:0}
+  input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--chalk);border:0}
+  input:focus-visible,button:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+  .tools{display:flex;gap:7px;margin-top:11px;padding-top:11px;border-top:1px solid var(--rule)}
+  .tools button{flex:1;font-family:var(--mono);font-size:10.5px;color:var(--dim);background:var(--panel2);
+    border:1px solid var(--rule);border-radius:7px;padding:8px 2px;cursor:pointer;transition:all .15s}
+  .tools button:hover{color:var(--chalk);border-color:var(--dimmer)}
+  .tools button[aria-pressed=true]{color:var(--ink);background:var(--amber);border-color:var(--amber)}
+  #callout{position:fixed;z-index:4;pointer-events:none;opacity:0;transition:opacity .25s;
+    font-family:var(--mono);font-size:11px;color:var(--amber);white-space:nowrap;transform:translate(14px,-50%)}
+  #callout.on{opacity:1}
+  #callout b{display:block;color:var(--chalk);font-weight:500;font-size:12px;margin-bottom:2px}
+  #hint{position:fixed;left:24px;bottom:20px;z-index:2;font-family:var(--mono);font-size:10.5px;color:var(--dimmer)}
+  @media (max-width:920px){
+    #panel{right:10px;left:10px;width:auto;top:auto;bottom:10px;transform:none;padding:12px}
+    #hint{display:none}#head{padding:14px 16px;max-width:100%}.axis{padding:5px 0}
+  }
+</style>
+
+<div id="stage"></div>
+<div id="head">
+  <div class="eyebrow">Form study &middot; flat-faced creature</div>
+  <h1 id="title">Screen face</h1>
+  <p class="sub" id="sub">The lower shell prints translucent with the LED ring inside — the body itself glows. Dark when asleep.</p>
+</div>
+<div id="callout"><b>Pi Camera</b>6 mm aperture in the bezel</div>
+
+<div id="panel">
+  <p class="ptitle">Face treatment</p>
+  <div class="seg">
+    <button id="m-face" aria-pressed="true">Screen</button>
+    <button id="m-lens" aria-pressed="false">Lens</button>
+  </div>
+
+  <p class="note" id="pnote">2.1&Prime; round IPS 480&times;480 over micro HDMI &middot; <b>53 mm active</b></p>
+
+  <p class="ptitle sp">Expression</p>
+  <div class="exgrid">
+    <button data-x="neutral" aria-pressed="true">Neutral</button>
+    <button data-x="happy" aria-pressed="false">Happy</button>
+    <button data-x="curious" aria-pressed="false">Curious</button>
+    <button data-x="surprise" aria-pressed="false">Surprised</button>
+    <button data-x="listen" aria-pressed="false">Listening</button>
+    <button data-x="sleepy" aria-pressed="false">Sleepy</button>
+  </div>
+
+  <p class="ptitle sp">Glow brightness</p>
+  <div class="axis" style="border-top:0;padding-top:0">
+    <div class="arow"><div class="aname">Level</div><div class="aval" id="v-glow">100%</div></div>
+    <input type="range" id="s-glow" min="0" max="220" value="100" step="5" aria-label="Glow brightness">
+  </div>
+
+  <p class="ptitle sp">Head motion</p>
+  <div class="axis">
+    <div class="arow"><div class="aname">Yaw</div><div class="aval" id="v-yaw">0°</div></div>
+    <input type="range" id="s-yaw" min="-175" max="175" value="0" step="1" aria-label="Yaw">
+  </div>
+  <div class="axis">
+    <div class="arow"><div class="aname">Pitch</div><div class="aval" id="v-pitch">0°</div></div>
+    <input type="range" id="s-pitch" min="-24" max="24" value="0" step="1" aria-label="Pitch">
+  </div>
+  <div class="axis">
+    <div class="arow"><div class="aname">Roll</div><div class="aval" id="v-roll">0°</div></div>
+    <input type="range" id="s-roll" min="-24" max="24" value="0" step="1" aria-label="Roll">
+  </div>
+
+  <div class="tools">
+    <button id="b-alive" aria-pressed="true">Alive</button>
+    <button id="b-glow" aria-pressed="true">Glow</button>
+    <button id="b-cam" aria-pressed="false">Camera?</button>
+    <button id="b-reset">Reset</button>
+  </div>
+</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const D=THREE.MathUtils.degToRad,V2=THREE.Vector2,V3=THREE.Vector3;
+const lerp=(a,b,t)=>a+(b-a)*t;
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x191614);
+const camera=new THREE.PerspectiveCamera(32,1,1,4000);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.outputEncoding=THREE.sRGBEncoding;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.05;
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.getElementById('stage').appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xcfd8e0,0x1a1512,0.64));
+const kL=new THREE.DirectionalLight(0xfff4e6,1.38);
+kL.position.set(250,420,370);kL.castShadow=true;
+kL.shadow.mapSize.set(2048,2048);
+kL.shadow.camera.near=80;kL.shadow.camera.far=1300;
+kL.shadow.camera.left=-300;kL.shadow.camera.right=300;
+kL.shadow.camera.top=430;kL.shadow.camera.bottom=-60;kL.shadow.bias=-0.0011;
+scene.add(kL);
+const fL=new THREE.DirectionalLight(0x9fc0d8,0.44);fL.position.set(-380,180,-220);scene.add(fL);
+const rL=new THREE.DirectionalLight(0xffd7a8,0.4);rL.position.set(-100,280,-400);scene.add(rL);
+
+const M={
+  shell:new THREE.MeshStandardMaterial({color:0xf0ebe3,roughness:0.9,metalness:0.02,side:THREE.DoubleSide}),
+  bib:new THREE.MeshStandardMaterial({color:0xdccbb4,roughness:0.92}),
+  bezel:new THREE.MeshStandardMaterial({color:0x1e1d1c,roughness:0.34,metalness:0.28}),
+  soft:new THREE.MeshStandardMaterial({color:0x3d3733,roughness:0.85}),
+  metal:new THREE.MeshStandardMaterial({color:0x9aa2ab,roughness:0.33,metalness:0.85}),
+  glass:new THREE.MeshBasicMaterial({color:0x070a0c}),
+  eye:new THREE.MeshBasicMaterial({color:0x7fd4e8}),
+  ring:new THREE.MeshStandardMaterial({color:0x3a2c14,emissive:0xe8a33d,emissiveIntensity:1.5,roughness:0.5}),
+  hi:new THREE.MeshBasicMaterial({color:0xe8a33d,transparent:true,opacity:0})
+};
+function mesh(g,m,x=0,y=0,z=0){const o=new THREE.Mesh(g,m);o.position.set(x,y,z);o.castShadow=true;o.receiveShadow=true;return o;}
+function flat(g,m,x=0,y=0,z=0){const o=mesh(g,m,x,y,z);o.castShadow=false;o.receiveShadow=false;return o;}
+function blob(m,sx,sy,sz,x,y,z){const o=mesh(new THREE.SphereGeometry(1,40,28),m,x,y,z);o.scale.set(sx,sy,sz);return o;}
+function rrect(w,h,r){
+  const s=new THREE.Shape(),x=-w/2,y=-h/2;
+  s.moveTo(x+r,y);s.lineTo(x+w-r,y);s.quadraticCurveTo(x+w,y,x+w,y+r);
+  s.lineTo(x+w,y+h-r);s.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  s.lineTo(x+r,y+h);s.quadraticCurveTo(x,y+h,x,y+h-r);
+  s.lineTo(x,y+r);s.quadraticCurveTo(x,y,x+r,y);
+  return new THREE.ShapeGeometry(s);
+}
+
+/* ground */
+const cv=document.createElement('canvas');cv.width=cv.height=512;
+const c2=cv.getContext('2d');
+const gg=c2.createRadialGradient(256,256,10,256,256,256);
+gg.addColorStop(0,'#2e2823');gg.addColorStop(.55,'#211d19');gg.addColorStop(1,'#191614');
+c2.fillStyle=gg;c2.fillRect(0,0,512,512);
+const gr=new THREE.Mesh(new THREE.CircleGeometry(600,96),new THREE.MeshStandardMaterial({map:new THREE.CanvasTexture(cv),roughness:1}));
+gr.rotation.x=-Math.PI/2;gr.receiveShadow=true;scene.add(gr);
+
+const robot=new THREE.Group();scene.add(robot);
+
+/* ---------- body ---------- */
+const bodyProf=[[0,0],[52,0],[68,6],[80,16],[86,30],[88,50],[88,68],[85,86],[79,102],[71,116],[62,126],[56,131]]
+  .map(p=>new V2(p[0],p[1]));
+const bodyMat=M.shell.clone();
+const bibMat=M.bib.clone();
+robot.add(mesh(new THREE.LatheGeometry(bodyProf,96),bodyMat));
+const collar=mesh(new THREE.TorusGeometry(56,3,10,72),M.shell,0,131);
+collar.rotation.x=Math.PI/2;robot.add(collar);
+robot.add(blob(bibMat,44,50,24,0,64,70));
+robot.add(blob(M.shell,8,28,17,-84,72,4));
+robot.add(blob(M.shell,8,28,17,84,72,4));
+robot.add(blob(M.soft,21,7,27,-33,6,54));
+robot.add(blob(M.soft,21,7,27,33,6,54));
+
+/* ---------- body status glow: ring INSIDE a translucent lower shell ---------- */
+/* vertical gradient: bright at the base (v=0), gone by mid-body */
+const gc=document.createElement('canvas');gc.width=8;gc.height=256;
+const g2=gc.getContext('2d');
+const lg=g2.createLinearGradient(0,0,0,256);   // canvas top = body top (flipY)
+lg.addColorStop(0.00,'#000000');
+lg.addColorStop(0.20,'#141414');
+lg.addColorStop(0.45,'#5a5a5a');
+lg.addColorStop(0.70,'#c8c8c8');
+lg.addColorStop(1.00,'#ffffff');
+g2.fillStyle=lg;g2.fillRect(0,0,8,256);
+const glowMap=new THREE.CanvasTexture(gc);
+const glowCol=new THREE.Color(0xF0D8B0);
+[bodyMat,bibMat].forEach(m=>{m.emissiveMap=glowMap;m.emissive=new THREE.Color(0x000000);m.emissiveIntensity=0;});
+/* soft spill onto the bench */
+const glowLight=new THREE.PointLight(0xF0D8B0,0,420);glowLight.position.set(0,26,0);scene.add(glowLight);
+
+/* ---------- head: sphere truncated by a plane ---------- */
+const HEAD_Y=162, R=62, CUT=46;           // flat face sits CUT mm from head centre
+const FACE_R=Math.sqrt(R*R-CUT*CUT);      // ≈41.6 mm — radius of the flat face
+
+const yawG=new THREE.Group();yawG.position.y=HEAD_Y;robot.add(yawG);
+const pitchG=new THREE.Group();yawG.add(pitchG);
+const rollG=new THREE.Group();pitchG.add(rollG);
+const faceG=new THREE.Group();faceG.rotation.x=-D(25);rollG.add(faceG);
+
+/* lathe about the face normal: flat front, spherical everywhere else */
+const hp=[new V2(0,CUT), new V2(FACE_R,CUT)];
+const th0=Math.acos(CUT/R);
+for(let i=0;i<=44;i++){
+  const th=th0+(Math.PI-th0)*(i/44);
+  hp.push(new V2(R*Math.sin(th), R*Math.cos(th)));
+}
+const skull=mesh(new THREE.LatheGeometry(hp,84),M.shell);
+skull.rotation.x=Math.PI/2;     // lathe +Y  ->  faceG +Z
+faceG.add(skull);
+
+/* bezel + shading lip sit ON the flat face */
+faceG.add(flat(new THREE.CircleGeometry(FACE_R,80),M.bezel,0,0,CUT+0.15));
+const lip=mesh(new THREE.TorusGeometry(FACE_R-1.2,2,10,80),M.bezel,0,0,CUT+0.7);
+faceG.add(lip);
+
+/* ---------- screen ---------- */
+const GZ=CUT+0.4;
+const screenG=new THREE.Group();faceG.add(screenG);
+screenG.add(flat(new THREE.CircleGeometry(33,64),M.glass,0,0,GZ));
+
+/* eye shapes — expression swaps geometry, no floating lids */
+/* sized for the 53 mm active circle — 26.5 mm usable radius */
+const GEO={
+  normal:rrect(14,18,6),   wide:rrect(16.4,21,7),  tall:rrect(13.4,19.5,6.3),
+  narrow:rrect(13.4,15,5.6), slit:rrect(14,6,3),
+  arc:new THREE.RingGeometry(6.7,11.3,44,1,D(28),D(124)).translate(0,-2.2,0)
+};
+function makeEye(sx){
+  const e=flat(GEO.normal,M.eye,0,0,GZ+0.3);
+  const b=flat(rrect(11,3.2,1.5),M.eye,0,12.5,GZ+0.3);
+  const g=new THREE.Group();g.position.x=sx;g.add(e);g.add(b);screenG.add(g);
+  return {g,e,b};
+}
+const eyeL=makeEye(-9), eyeR=makeEye(9);
+const screenGlow=new THREE.PointLight(0x7fd4e8,0.5,240);screenGlow.position.set(0,0,GZ+22);screenG.add(screenGlow);
+
+/* camera aperture in the bezel band */
+const camG=new THREE.Group();faceG.add(camG);
+camG.add(mesh(new THREE.CylinderGeometry(3.2,3.2,2.5,24).rotateX(Math.PI/2),M.glass,0,37,CUT+0.3));
+camG.add(mesh(new THREE.TorusGeometry(3.7,0.5,8,28),M.metal,0,37,CUT+0.6));
+const camHi=flat(new THREE.TorusGeometry(7.5,1.2,10,40),M.hi.clone(),0,37,CUT+0.9);camG.add(camHi);
+const camAnchor=new THREE.Object3D();camAnchor.position.set(0,37,CUT+3);camG.add(camAnchor);
+
+/* ---------- lens variant ---------- */
+const lensG=new THREE.Group();faceG.add(lensG);lensG.visible=false;
+lensG.add(mesh(new THREE.TorusGeometry(25,3.6,12,56),M.ring,0,0,CUT+1.2));
+lensG.add(mesh(new THREE.CylinderGeometry(11,11,4,32).rotateX(Math.PI/2),M.glass,0,0,CUT+1));
+lensG.add(mesh(new THREE.CylinderGeometry(6.6,6.6,3,32).rotateX(Math.PI/2),M.metal,0,0,CUT+2.6));
+const lensGlow=new THREE.PointLight(0xe8a33d,0.65,240);lensGlow.position.set(0,0,CUT+22);lensG.add(lensGlow);
+
+/* ---------- expressions ---------- */
+const EX={
+  neutral :{geo:'normal',ey:0,   bY:12.5,bR:5, asym:0,ring:1.3, pitch:0,  roll:0,  gaze:1,   gc:0xF0D8B0,gi:0.62,gp:0},
+  happy   :{geo:'arc',   ey:1.5, bY:13,  bR:13,asym:0,ring:2.2, pitch:7,  roll:0,  gaze:1,   gc:0xFFBE45,gi:1.15,gp:0},
+  curious :{geo:'tall',  ey:1,   bY:12.5,bR:9, asym:3,ring:1.6, pitch:9,  roll:-21,gaze:1.6, gc:0x7FD4E8,gi:0.95,gp:0},
+  surprise:{geo:'wide',  ey:1.5, bY:13.5,bR:2, asym:0,ring:2.6, pitch:16, roll:0,  gaze:0.3, gc:0xBDEFFA,gi:1.55,gp:0},
+  listen  :{geo:'narrow',ey:0,   bY:12.5,bR:7, asym:0,ring:1.9, pitch:5,  roll:15, gaze:0.8, gc:0x5EC8E0,gi:1.05,gp:1},
+  sleepy  :{geo:'slit',  ey:-3,  bY:9.5, bR:1, asym:0,ring:0.35,pitch:-20,roll:7,  gaze:0.15,gc:0x35506A,gi:0.00,gp:0}
+};
+let target='neutral',curGeo='normal';
+const cur={ey:0,bY:12.5,bR:5,asym:0,ring:1.3,gi:0.62};
+const gTarget=new THREE.Color(0xF0D8B0);
+let glowOn=true, glowScale=1;
+const pose={pitch:0,roll:0}, man={yaw:0,pitch:0,roll:0};
+let variant='face',alive=true,camOn=false;
+
+function setExpr(k){
+  target=k;
+  const g=EX[k].geo;
+  if(g!==curGeo){curGeo=g;eyeL.e.geometry=GEO[g];eyeR.e.geometry=GEO[g];}
+  document.querySelectorAll('.exgrid button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.x===k));
+}
+document.querySelectorAll('.exgrid button').forEach(b=>b.addEventListener('click',()=>setExpr(b.dataset.x)));
+
+const COPY={
+  face:{t:'Screen face',s:'The lower shell prints translucent with the LED ring inside — the body itself glows. Dark when asleep.'},
+  lens:{t:'Lens only',s:'Same six expressions requested — all the lens can do is change brightness and pose.'}
+};
+function setVariant(v){
+  variant=v;screenG.visible=(v==='face');camG.visible=(v==='face');lensG.visible=(v==='lens');
+  document.getElementById('m-face').setAttribute('aria-pressed',v==='face');
+  document.getElementById('m-lens').setAttribute('aria-pressed',v==='lens');
+  document.getElementById('title').textContent=COPY[v].t;
+  document.getElementById('sub').textContent=COPY[v].s;
+  document.getElementById('pnote').style.display=(v==='face')?'':'none';
+  document.getElementById('b-cam').style.opacity=(v==='face')?1:0.35;
+  if(v!=='face'&&camOn) toggleCam(false);
+}
+document.getElementById('m-face').addEventListener('click',()=>setVariant('face'));
+document.getElementById('m-lens').addEventListener('click',()=>setVariant('lens'));
+function toggleCam(v){
+  camOn=(v===undefined)?!camOn:v; if(variant!=='face') camOn=false;
+  document.getElementById('b-cam').setAttribute('aria-pressed',camOn);
+  document.getElementById('callout').classList.toggle('on',camOn);
+}
+document.getElementById('b-cam').addEventListener('click',()=>toggleCam());
+document.getElementById('b-alive').addEventListener('click',e=>{alive=!alive;e.target.setAttribute('aria-pressed',alive);});
+document.getElementById('s-glow').addEventListener('input',e=>{
+  glowScale=(+e.target.value)/100;
+  document.getElementById('v-glow').textContent=e.target.value+'%';
+});
+document.getElementById('b-glow').addEventListener('click',e=>{glowOn=!glowOn;e.target.setAttribute('aria-pressed',glowOn);});
+document.getElementById('b-reset').addEventListener('click',()=>{
+  man.yaw=man.pitch=man.roll=0;setExpr('neutral');
+  ['yaw','pitch','roll'].forEach(k=>{document.getElementById('s-'+k).value=0;document.getElementById('v-'+k).textContent='0°';});
+  Object.assign(cam,home);updateCam();
+});
+['yaw','pitch','roll'].forEach(k=>document.getElementById('s-'+k)
+  .addEventListener('input',e=>{man[k]=+e.target.value;
+    document.getElementById('v-'+k).textContent=(man[k]>0?'+':'')+man[k]+'°';}));
+
+/* ---------- orbit ---------- */
+const cam={az:D(12),pol:D(74),dist:415,ty:152};
+const home={az:cam.az,pol:cam.pol,dist:cam.dist,ty:cam.ty};
+function updateCam(){
+  cam.pol=Math.max(D(16),Math.min(D(98),cam.pol));
+  cam.dist=Math.max(230,Math.min(1400,cam.dist));
+  camera.position.set(cam.dist*Math.sin(cam.pol)*Math.sin(cam.az),cam.ty+cam.dist*Math.cos(cam.pol),cam.dist*Math.sin(cam.pol)*Math.cos(cam.az));
+  camera.lookAt(0,cam.ty,0);
+}
+let drag=null,pinch=0;const el=renderer.domElement;
+el.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};el.setPointerCapture(e.pointerId);});
+el.addEventListener('pointerup',()=>drag=null);
+el.addEventListener('pointercancel',()=>drag=null);
+el.addEventListener('pointermove',e=>{if(!drag)return;
+  cam.az-=(e.clientX-drag.x)*0.0068;cam.pol-=(e.clientY-drag.y)*0.0056;
+  drag={x:e.clientX,y:e.clientY};updateCam();});
+el.addEventListener('wheel',e=>{e.preventDefault();cam.dist*=1+e.deltaY*0.0011;updateCam();},{passive:false});
+el.addEventListener('touchmove',e=>{if(e.touches.length!==2)return;
+  const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+  if(pinch){cam.dist*=pinch/d;updateCam();}pinch=d;},{passive:true});
+el.addEventListener('touchend',()=>pinch=0);
+function resize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);}
+addEventListener('resize',resize);resize();updateCam();setVariant('face');setExpr('neutral');
+
+/* ---------- loop ---------- */
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let nextBlink=2.2,blinkK=1;
+const calloutEl=document.getElementById('callout'),camWorld=new V3();
+(function loop(){
+  requestAnimationFrame(loop);
+  const t=performance.now()/1000,T=EX[target],k=0.12;
+  for(const p of ['ey','bY','bR','asym','ring']) cur[p]=lerp(cur[p],T[p],k);
+  gTarget.setHex(T.gc);
+  const pulse=T.gp&&alive&&!reduced ? 0.78+Math.sin(t*1.9)*0.22 : 1;
+  cur.gi=lerp(cur.gi,(glowOn?T.gi:0)*pulse,0.07);
+  glowCol.lerp(gTarget,0.06);
+  const gm=glowScale;
+  bodyMat.emissive.copy(glowCol); bodyMat.emissiveIntensity=cur.gi*2.3*gm;
+  bibMat.emissive.copy(glowCol);  bibMat.emissiveIntensity=cur.gi*1.8*gm;
+  glowLight.color.copy(glowCol);  glowLight.intensity=cur.gi*0.85*gm;
+  pose.pitch=lerp(pose.pitch,T.pitch,k);pose.roll=lerp(pose.roll,T.roll,k);
+
+  if(alive&&!reduced&&variant==='face'&&curGeo!=='slit'){
+    if(t>nextBlink){
+      const p=(t-nextBlink)/0.14;
+      if(p<1) blinkK=1-Math.sin(p*Math.PI)*0.94;
+      else {blinkK=1;nextBlink=t+2.1+Math.random()*3.6;}
+    }
+  } else blinkK=1;
+
+  const gz=(alive&&!reduced)?T.gaze:0;
+  const dx=(Math.sin(t*0.37)*1.5+Math.sin(t*0.94)*0.6)*gz;
+  const dy=Math.sin(t*0.55)*0.7*gz;
+
+  eyeL.e.scale.set(1,blinkK,1); eyeR.e.scale.set(1,blinkK,1);
+  eyeL.g.position.set(-9+dx,cur.ey+dy,0);
+  eyeR.g.position.set( 9+dx,cur.ey+dy,0);
+  eyeL.b.position.y=cur.bY+cur.asym; eyeL.b.rotation.z= D(cur.bR+cur.asym*0.8);
+  eyeR.b.position.y=cur.bY-cur.asym*0.4; eyeR.b.rotation.z=-D(cur.bR-cur.asym*0.5);
+
+  M.ring.emissiveIntensity=cur.ring*(1+(alive&&!reduced?Math.sin(t*1.5)*0.12:0));
+  lensGlow.intensity=0.5*cur.ring; screenGlow.intensity=0.5*blinkK;
+
+  yawG.rotation.y=D(man.yaw);
+  pitchG.rotation.x=D(-(man.pitch+pose.pitch));
+  rollG.rotation.z=D(man.roll+pose.roll);
+  robot.position.y=(alive&&!reduced)?Math.sin(t*1.15)*0.7:0;
+
+  camHi.material.opacity=camOn?(0.45+Math.sin(t*4)*0.35):0;
+  camHi.scale.setScalar(camOn?1+Math.sin(t*4)*0.12:1);
+  renderer.render(scene,camera);
+
+  if(camOn){
+    camAnchor.getWorldPosition(camWorld);
+    const p=camWorld.clone().project(camera);
+    calloutEl.style.left=((p.x*0.5+0.5)*innerWidth)+'px';
+    calloutEl.style.top=((-p.y*0.5+0.5)*innerHeight)+'px';
+  }
+})();
+</script>
