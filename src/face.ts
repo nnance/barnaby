@@ -7,8 +7,11 @@ import { LAYOUT } from './layout';
 
 const {
   eyeX: EYE_X_MM, browW: BROW_W_MM, browH: BROW_H_MM, browR: BROW_R_MM,
-  driftX, driftY, lookX, lookY, eyeColor: EYE_COLOR, background: BG,
+  driftX, driftY, lookX, lookY, maxDX, maxDY,
+  eyeColor: EYE_COLOR, background: BG,
 } = LAYOUT;
+
+const clamp = (v: number, lim: number) => Math.max(-lim, Math.min(lim, v));
 
 const BLINK_MS = 140;
 const BLINK_MIN_S = 2.1;
@@ -145,8 +148,8 @@ export class Face {
     // Idle drift + tracked gaze. Amplitudes verified against the 26.5 mm circle.
     const g = this.cur.gaze;
     const idle = Math.sin(t * 0.37) * 0.7 + Math.sin(t * 0.94) * 0.3;
-    const dx = idle * driftX * g + this.lookSmooth.x * lookX;
-    const dy = Math.sin(t * 0.55) * driftY * g + this.lookSmooth.y * lookY;
+    const dx = clamp(idle * driftX * g + this.lookSmooth.x * lookX, maxDX);
+    const dy = clamp(Math.sin(t * 0.55) * driftY * g + this.lookSmooth.y * lookY, maxDY);
 
     ctx.fillStyle = EYE_COLOR;
     for (const side of [-1, 1] as const) {

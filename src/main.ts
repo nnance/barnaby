@@ -4,7 +4,12 @@ import { STATES, type StateName } from './expressions';
 import './style.css';
 
 const params = new URLSearchParams(location.search);
-const DEV = params.has('dev');
+// Dev tools are ON by default under `npm run dev` and OFF in a production
+// build. `?dev=1` forces them on (useful when previewing dist/), `?dev=0`
+// forces them off (useful for checking what the kiosk will actually show).
+const DEV = params.get('dev') === '0' ? false
+  : params.get('dev') !== null ? true
+  : import.meta.env.DEV;
 const WS_URL = params.get('ws')
   ?? `ws://${location.hostname || '127.0.0.1'}:8711/face`;
 
@@ -22,6 +27,9 @@ const transport = new Transport(WS_URL, {
 });
 transport.connect();
 
+// Only the kiosk hides the cursor. On a laptop that just loses your pointer.
+if (!DEV) document.body.classList.add('kiosk');
+
 // The face is a pure view. It owns no policy — the orchestrator decides that a
 // fault outranks a mood, that sleep follows idle, and so on. All this does is
 // draw what it is told, and keep drawing when told nothing.
@@ -31,7 +39,8 @@ if (DEV) {
   panel.id = 'dev';
   for (const name of Object.keys(STATES) as StateName[]) {
     const b = document.createElement('button');
-    b.textContent = name;
+    b.dataset.state = name;
+    b.textContent = `${Object.keys(STATES).indexOf(name) + 1}  ${name}`;
     b.onclick = () => {
       face.setState(name);
       for (const el of panel.querySelectorAll('button')) {
@@ -55,18 +64,30 @@ if (DEV) {
   row.append(swatch, label);
   panel.appendChild(row);
 
-  // Drag anywhere on the face to simulate gaze from the tracker.
-  let dragging = false;
-  const setLook = (e: PointerEvent) => {
+  // Move the pointer anywhere in the window and Barnaby's eyes follow it —
+  // this is what the face tracker will drive. No drag needed; the whole point
+  // is that it should be immediately obvious that he's watching you.
+  addEventListener('pointermove', (e) => {
     const r = canvas.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
     face.setLook(
-      ((e.clientX - r.left) / r.width - 0.5) * 2,
-      ((e.clientY - r.top) / r.height - 0.5) * 2,
+      (e.clientX - cx) / (r.width / 2),
+      (e.clientY - cy) / (r.height / 2),
     );
-  };
-  canvas.addEventListener('pointerdown', (e) => { dragging = true; setLook(e); });
-  canvas.addEventListener('pointermove', (e) => { if (dragging) setLook(e); });
-  addEventListener('pointerup', () => { dragging = false; face.setLook(0, 0); });
+  });
+  addEventListener('pointerleave', () => face.setLook(0, 0));
+
+  // Number keys cycle states without reaching for the mouse.
+  const names = Object.keys(STATES) as StateName[];
+  addEventListener('keydown', (e) => {
+    const i = '1234567890'.indexOf(e.key);
+    const name = i >= 0 ? names[i] : undefined;
+    if (name) {
+      const btn = panel.querySelector<HTMLButtonElement>(`[data-state="${name}"]`);
+      btn?.click();
+    }
+  });
 
   document.body.appendChild(panel);
 }

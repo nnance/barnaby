@@ -9,7 +9,8 @@ html, body {
   display: grid; place-items: center;
   font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
 }
-body { cursor: none; }
+/* Only the kiosk hides the cursor — on a laptop it just loses your pointer. */
+body.kiosk { cursor: none; }
 #face {
   width: 480px; height: 480px;
   border-radius: 50%;          /* mirrors the physical bezel while developing */

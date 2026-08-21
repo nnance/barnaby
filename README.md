@@ -9,13 +9,17 @@ draws what it's told, and keeps drawing when it's told nothing.
 
 ```bash
 npm install
-npm run dev          # http://localhost:5273/?dev=1
+npm run dev          # http://localhost:5273  — dev tools on automatically
 npm run check:fit    # geometry regression — must pass before build
 npm run build        # → dist/, ~8 kB JS
 ```
 
-Open `?dev=1` for state buttons and a body-glow swatch. **Drag on the face** to
-simulate gaze from the tracker.
+Dev tools are on by default under `npm run dev` and stripped from a production
+build. **Move your pointer** and Barnaby's eyes follow it — that's what the face
+tracker will drive. Number keys `1`–`0` switch states. A body-glow swatch shows
+the colour the ESP32 would be sent.
+
+`?dev=0` previews exactly what the kiosk shows: no panel, no cursor.
 
 ## The panel constraint
 
@@ -30,7 +34,12 @@ This is not decorative. Two expressions were silently clipping before it
 existed, and a bounding-box approximation of the "happy" arc was wrong by
 several millimetres. **Run it after any layout edit.**
 
-Current worst case: `curious` at 24.3 mm, 2.2 mm of margin.
+Idle drift and tracked gaze are **clamped as a combined offset** (`maxDX`,
+`maxDY`) rather than summed. Without that cap the two stack, the worst case eats
+the margin, and gaze has to be timid to stay safe. Clamping lets gaze be
+generous while the geometry stays guaranteed.
+
+Current worst case: `surprise` at 25.2 mm, 1.3 mm of margin.
 
 ## Protocol
 

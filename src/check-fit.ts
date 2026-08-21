@@ -11,10 +11,10 @@
 import {
   ACTIVE_RADIUS_MM, EYES, STATES,
   type EyeGeom, type FaceState, type StateName,
-} from './expressions.js';
-import { LAYOUT } from './layout.js';
+} from '../src/expressions';
+import { LAYOUT } from '../src/layout';
 
-const { eyeX, browW, browH, driftX, driftY, lookX, lookY } = LAYOUT;
+const { eyeX, browW, browH, maxDX, maxDY } = LAYOUT;
 
 /** Points on the eye outline, in the eye's own frame (+y up). */
 function eyeOutline(g: EyeGeom): [number, number][] {
@@ -52,9 +52,9 @@ let worst = 0, worstName = '';
 let failed = false;
 
 for (const [name, s] of Object.entries(STATES) as [StateName, FaceState][]) {
-  // Worst case: idle drift and tracked gaze pushing the same direction.
-  const dx = driftX * s.gaze + lookX;
-  const dy = driftY * s.gaze + lookY;
+  // Worst case is the clamp, not the sum — the renderer caps combined offset.
+  const dx = maxDX;
+  const dy = maxDY;
   let mm = 0;
 
   for (const side of [-1, 1] as const) {
