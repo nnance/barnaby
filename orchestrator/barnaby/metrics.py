@@ -15,11 +15,21 @@ spoken answer under 2000 ms to first audio.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 
 log = logging.getLogger("barnaby.metrics")
+
+# Where each turn is appended as one JSON object. Printed metrics scroll away
+# with the terminal, which made every latency claim so far a matter of whoever
+# happened to be looking at the screen — and two stages once moved by 300 ms
+# with no record of when. One line per turn, so `tail`, `grep` and jq all work
+# without a parser.
+LOG_PATH = Path.home() / ".cache" / "barnaby" / "turns.jsonl"
 
 # Stages in the order they should appear in the report.
 # In a streaming pipeline SPEAKING happens BEFORE tts_done — audio starts on
@@ -65,7 +75,55 @@ class Turn:
                 return label, ms
         return None
 
-    def report(self, targets: dict[str, int]) -> None:
+    def record(self, targets: dict[str, int], path: Path | None = None) -> None:
+        """Append this turn to the JSONL log.
+
+        Deltas are stored alongside the raw marks. The marks are the source of
+        truth — they are `perf_counter` values, so only meaningful relative to
+        each other within a turn — but storing the deltas too means a question
+        like "what has TTFT done this week" is a one-liner rather than a
+        subtraction against ORDER.
+
+        Never raises. A full disk or a read-only home is not a reason to drop
+        the conversation the user is currently having.
+        """
+        path = path or LOG_PATH
+        deltas = {}
+        prev: str | None = None
+        for name in ORDER:
+            if name not in self.marks:
+                continue
+            if prev is not None:
+                dt = self.since(prev, name)
+                if dt is not None:
+                    deltas[f"{prev}->{name}"] = round(dt, 1)
+            prev = name
+
+        got = self.perceived
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "tier": self.tier,
+            "text": self.text,
+            "reply": self.reply,
+            # Which mark first audio was measured from. With --say there is no
+            # endpoint, so a run's numbers are not comparable to a live one's
+            # unless you know this — hence storing it rather than the ms alone.
+            "measured_from": got[0] if got else None,
+            "first_audio_ms": round(got[1], 1) if got else None,
+            "budget_ms": targets.get(
+                "device_command_ms" if self.tier == "tier0"
+                else "spoken_answer_ms"),
+            "deltas_ms": deltas,
+            "marks": {k: round(v - self.t0, 4) for k, v in self.marks.items()},
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except Exception:                              # noqa: BLE001
+            log.debug("could not write %s", path, exc_info=True)
+
+    def report(self, targets: dict[str, int], record: bool = True) -> None:
         rows: list[tuple[str, float]] = []
         prev: str | None = None
         for name in ORDER:
@@ -79,6 +137,9 @@ class Turn:
 
         width = max((len(r[0]) for r in rows), default=20)
         lines = [f"  {a:<{width}}  {ms:7.1f} ms" for a, ms in rows]
+
+        if record:
+            self.record(targets)
 
         budget = targets["device_command_ms"] if self.tier == "tier0" \
             else targets["spoken_answer_ms"]

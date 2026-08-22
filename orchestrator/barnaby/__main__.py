@@ -6,6 +6,7 @@
   python -m barnaby --devices       list audio devices and exit
   python -m barnaby --levels        live input meter, per channel
   python -m barnaby --record 5      capture what the pipeline hears, to a wav
+  python -m barnaby --latency       summarise recorded turn latencies
 """
 from __future__ import annotations
 
@@ -95,6 +96,65 @@ def levels(cfg: Config) -> int:
     return 0
 
 
+def latency(last: int) -> int:
+    """Summarise the recorded turns.
+
+    Medians rather than means throughout: one cold-start turn with unloaded
+    weights on the Mac is several times a warm one and drags an average
+    somewhere no turn ever was.
+
+    Only turns measured from `endpoint` are counted — a `--say` run has no
+    microphone and starts its clock later, so mixing the two would quietly
+    flatter the numbers.
+    """
+    import json
+    import statistics
+    from .metrics import LOG_PATH
+
+    if not LOG_PATH.exists():
+        print(f"no turns recorded yet — {LOG_PATH} does not exist")
+        return 1
+
+    rows = []
+    for line in LOG_PATH.read_text().splitlines():
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue        # a torn final line from a kill mid-write
+
+    live = [r for r in rows if r.get("measured_from") == "endpoint -> audio"]
+    skipped = len(rows) - len(live)
+    if not live:
+        print(f"{len(rows)} turn(s) recorded, none with a microphone in the path")
+        return 1
+    live = live[-last:]
+
+    print(f"{len(live)} turn(s) from {LOG_PATH}"
+          + (f"  ({skipped} --say turn(s) excluded)" if skipped else ""))
+    print(f"  {live[0]['ts']}  ->  {live[-1]['ts']}\n")
+
+    stages: dict[str, list[float]] = {}
+    for r in live:
+        for k, v in r.get("deltas_ms", {}).items():
+            stages.setdefault(k, []).append(v)
+
+    width = max(len(k) for k in stages)
+    print(f"  {'stage':<{width}}  {'median':>9} {'min':>8} {'max':>8}   n")
+    for name, vals in stages.items():
+        print(f"  {name:<{width}}  {statistics.median(vals):8.1f}ms "
+              f"{min(vals):7.1f} {max(vals):7.1f}  {len(vals):3d}")
+
+    first = [r["first_audio_ms"] for r in live if r.get("first_audio_ms")]
+    if first:
+        budget = live[-1].get("budget_ms") or 2000
+        over = sum(1 for v in first if v > budget)
+        print(f"\n  {'TIME TO FIRST AUDIO':<{width}}  "
+              f"{statistics.median(first):8.1f}ms "
+              f"{min(first):7.1f} {max(first):7.1f}  {len(first):3d}")
+        print(f"  budget {budget} ms — {len(first) - over}/{len(first)} within it")
+    return 0
+
+
 async def record(cfg: Config, seconds: float, path: str) -> int:
     """Capture the exact stream the pipeline sees, to a file you can play back.
 
@@ -131,6 +191,8 @@ async def main_async(args: argparse.Namespace) -> int:
         return 0
     if args.levels:
         return levels(cfg)
+    if args.latency:
+        return latency(args.latency_last)
     if args.record:
         return await record(cfg, args.record, args.record_to)
     if args.check:
@@ -215,6 +277,10 @@ def main() -> int:
     p.add_argument("--devices", action="store_true", help="list audio devices")
     p.add_argument("--levels", action="store_true",
                    help="live per-channel input meter — is the mic hearing anything?")
+    p.add_argument("--latency", action="store_true",
+                   help="summarise recorded turn latencies and exit")
+    p.add_argument("--latency-last", type=int, default=50, metavar="N",
+                   help="how many recent turns --latency summarises (default 50)")
     p.add_argument("--record", type=float, metavar="SECONDS",
                    help="record the configured device+channel to a wav and exit")
     p.add_argument("--record-to", default="/tmp/barnaby-capture.wav",
