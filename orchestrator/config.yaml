@@ -61,10 +61,7 @@ mac:
   # `curl http://<mac>:8002/v1/audio/voices` lists all 53.
   # Naming is <lang><gender>_<name>: a=American b=British, f=female m=male.
   tts_voice: bm_fable
-  # A ceiling on how long Barnaby can talk, and so on how long the user waits
-  # for the follow-up window: he speaks at ~2.4 words/sec, and the window
-  # opens only when he stops. 400 tokens is nearly two minutes of speech.
-  max_tokens: 150
+  max_tokens: 400
   temperature: 0.4
 
 home_assistant:
