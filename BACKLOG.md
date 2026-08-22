@@ -1,7 +1,8 @@
 ## Next, in order
 
 1. **ReSpeaker — enumerating, now validate it against a human.** It came back
-   on 2026-08-22 with nothing changed (`2886:001a`, card 3), and `config.yaml`
+   on 2026-08-22 after a Pi reboot plus an unplug/replug (`2886:001a`, card 3),
+   and `config.yaml`
    now points `input_device` at it. Capture works through the pipeline's own
    path; the descriptor says 2 channels, beamformed on-board, no raw capsules.
 

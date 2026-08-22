@@ -103,11 +103,18 @@ Mac shows low GPU and near-zero CPU at this load — lots of headroom.
 
 **Audio, as of 2026-08-22.** The ReSpeaker XVF3800 **now enumerates** —
 `2886:001a`, ALSA card 3, after a long spell of not appearing in `lsusb`,
-`arecord -l` or `--devices` at all. Nothing was changed to fix it, so the cause
-is unknown and it may well come back; if it does, check the cable and port
-before assuming the I2S-firmware theory. `input_device` is now `"reSpeaker"`,
-which restores beamforming and far-field. Output is still the Waveshare card,
-so AEC has no reference and `barge_in_enabled` stays `false`.
+`arecord -l` or `--devices` at all. What preceded it: **a Pi reboot and a
+physical unplug/replug of the array.** Which of the two did it is untested, but
+that is the thing to try first if it ever goes missing again — and it retires
+the I2S-firmware theory, since the board plainly speaks USB Audio Class when it
+comes up at all. `input_device` is now `"reSpeaker"`, which restores
+beamforming and far-field. Output is still the Waveshare card, so AEC has no
+reference and `barge_in_enabled` stays `false`.
+
+The likely mechanism is USB enumeration, not the array: the XVF3800 draws
+meaningfully at boot, and a device that loses its handshake stays invisible
+until the port is re-cycled. Worth watching once the M.2 HAT and the servo buck
+land, since both make the power situation worse.
 
 Two corrections to what was assumed while it was missing:
 
@@ -218,7 +225,8 @@ identity, ESP32, CAD.
 | openwakeword | Hard-depends on `tflite-runtime`, no cp313 wheels. Optional `[wake]` extra, needs Python 3.11/3.12 |
 | `silero-vad` package | Declares torch. We fetch the `.onnx` directly instead |
 | XVF3800 | **2 channels, not many** — the DSP beamforms on-board and exposes no raw capsules over USB. Use ch0 (~7 dB hotter than ch1). Descriptor is the authority here; the usual XMOS "ch0 beamformed, rest raw" lore does not match this firmware |
-| XVF3800 went missing, then came back | It failed to enumerate at all for a long stretch, then appeared on 2026-08-22 with no change made. Cause unknown, so treat a disappearance as cable/port first, not firmware |
+| `--devices` shows the array as `0 in / 2 out` | Its capture stream is already open — i.e. Barnaby is running. Looks identical to the device failing to enumerate, right after a period when it genuinely was. `fuser -v /dev/snd/pcmC3D0c` names the holder; `/proc/asound/card3/pcm0c/sub0/status` shows RUNNING |
+| XVF3800 went missing, then came back | It failed to enumerate for a long stretch, then appeared on 2026-08-22 after **a Pi reboot plus an unplug/replug**. Try exactly that before suspecting firmware — the long detour into "it must be the I2S variant" cost real time and was wrong |
 | `playback_rate` | 24000 on the USB card, **16000** on the array. Mismatch = wrong pitch and speed |
 | Barge-in | Only works with playback routed through the array — its AEC needs the reference. Currently `false` |
 | Speaker connector | Board is JST PH 2.0; speakers are XH 2.5. Pigtail needed. Board connector is **top-entry** — affects CAD clearance |

@@ -126,8 +126,17 @@ arecord -l                 # the array should appear
 lsusb                      # confirms it enumerated
 ```
 
-If `lsusb` shows nothing, you have the I2S firmware variant of the XVF3800, not
-a dead board.
+If `lsusb` shows nothing, **do not conclude anything about the board yet.** In
+this build it went missing for a long stretch and came back on 2026-08-22 after
+a Pi reboot plus a physical unplug and replug. Work through that first:
+
+1. Unplug the array, plug it back in, `lsusb` again.
+2. Try the other USB 3 port, and a different cable.
+3. Reboot the Pi with the array already attached.
+
+Only if all of that fails is the I2S firmware variant worth considering, and it
+is the last hypothesis rather than the first — chasing it early cost real time
+here. A board that enumerates at all speaks USB Audio Class, which rules it out.
 
 Record and play it back — this is why playback came first:
 
@@ -160,12 +169,21 @@ enumerate:
 
 ```yaml
 audio:
-  input_device: "ReSpeaker"
-  output_device: "Waveshare"
+  input_device: "reSpeaker"
+  output_device: "USB PnP"
   input_channel: 0
   barge_in_enabled: false
   playback_rate: 24000
 ```
+
+Use the strings the device actually reports, not the names on the boxes — the
+Waveshare card presents as `USB PnP Audio Device`, and there is no substring
+"Waveshare" anywhere in the device list to match on.
+
+One trap when reading that list: **`--devices` shows 0 input channels for a
+device whose capture stream is already open.** If Barnaby is running, the array
+reports `0 in / 2 out` and looks broken. Check
+`fuser -v /dev/snd/pcmC<N>D0c` before believing it.
 
 The startup log prints which device it opened and how many channels. Glance at
 those two lines before anything else.

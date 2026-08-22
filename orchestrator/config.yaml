@@ -3,7 +3,8 @@
 audio:
   # `python -m barnaby --devices` to find these.
   # Input is the ReSpeaker XVF3800, which finally enumerated on 2026-08-22
-  # (2886:001a, ALSA card 3) after a long spell of not appearing at all.
+  # (2886:001a, ALSA card 3) after a Pi reboot plus an unplug/replug. If it
+  # ever vanishes from --devices again, do that before anything else.
   # Output is still TEMPORARY — the Waveshare USB sound card, until the JST
   # PH 2.0 pigtail arrives and the speaker can hang off the array itself.
   # Because playback does not go through the array, its AEC has no reference
