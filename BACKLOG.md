@@ -1,32 +1,29 @@
 ## Next, in order
 
-1. **Active session — the wake word should open a conversation, not a turn.**
-   Say "Barnaby, what's the weather", then just say "what about tomorrow"
-   without waking him again. Today every single turn needs the wake word, which
-   makes talking to him feel like issuing commands rather than having a
-   conversation.
+1. **Active session — built 2026-08-22, needs a kitchen test.** A wake word
+   now opens a conversation: after speaking, Barnaby stays listening for
+   `follow_up_ms` and VAD alone starts the next turn. The window opens only
+   after playback drains, so his own voice cannot trigger it. Sessions end on
+   silence, on an empty transcript, or on a tier 0 command; history expires
+   separately on `session_idle_ms` (3 min).
 
-   The context half is already built: `_answer` feeds `history[-6:]` back to
-   the LLM, so follow-ups already resolve correctly once they reach it. The
-   missing half is the listening window — after Barnaby stops speaking, stay
-   open for a few seconds and let VAD alone start the next turn, the way
-   `--open-mic` does but time-boxed. Buildable now — the window opens *after*
-   playback ends, so it needs no AEC, which is just as well since barge-in
-   stays off until the JST pigtail moves playback onto the array.
+   How the four decisions were settled:
+   - **Window: 10 s**, chosen deliberately generous. Tested only against fakes.
+   - **Tier 0 does not open one** (`follow_up_after_tier0: false`) — device
+     commands never reach history, so a follow-up would have nothing to
+     resolve against. Moot until a real tier 0 exists.
+   - **History expires on time**, not with the window, so re-waking inside a
+     session still resolves "what about tomorrow".
+   - **Face shows `listening`** while the window is open.
 
-   Four decisions:
-   - **How long the window stays open.** It inherits `--open-mic`'s weakness —
-     an open mic in a kitchen will sometimes answer the television. Short
-     enough that this is rare, long enough to be worth having.
-   - **Whether tier 0 opens one.** Device commands return before `_answer` and
-     never touch history, so "turn off the kitchen lights" then "and the
-     counter ones too" has nothing to work with. Arguably the bigger gap.
-   - **When the session ends.** History never expires today — it is a plain
-     list living as long as the process, so this morning's conversation is
-     still in context tonight. `sleep_after_frames` (~3 min idle) is the
-     natural place to clear it.
-   - **What the face shows** while the window is open, so it is visible that he
-     is still listening. `listening` already exists.
+   What is left:
+   - **Find the real number for `follow_up_ms`.** 10 s is an open mic with no
+     wake word in front of it, in a room with a television, and VAD cannot
+     tell a person from a TV. Expect to cut it. Watch for turns nobody started.
+   - **Check the empty-transcript exit is right.** A turn the TV opened ends
+     the session silently, which is the intent; confirm it does not also eat
+     legitimate quiet follow-ups.
+
 2. **Wake word.** Train "barnaby" from synthetic speech — `hey_jarvis` already
    proves the path — then test against the real kitchen, TV on, extractor
    running. Retune `preroll_ms` at the same time; too much of it and the wake
@@ -61,10 +58,9 @@
      allowlist rather than an open plugin surface, confirmation for side
      effects. Benchmark reliability too — small models are weak at multi-step
      tool use.
-5. **A systemd unit for the Pi.** Nothing starts on boot today; it is
-   `cd ~/barnaby && source .venv/bin/activate && python -m barnaby` by hand
-   every time. Put the token in an `EnvironmentFile` rather than a shell
-   `export` that does not survive.
+5. **Identity, or some way to know who is talking.** No face or voice
+   recognition, so personal data stays off limits and the system prompt is the
+   only thing enforcing it. Blocks anything personal in tool calling.
 6. **TTFT — mostly resolved itself, but find out why.** It was 680 ms and the
    largest stage; on the 2026-08-22 live-mic run it was **357 ms**, with
    Kokoro's first clip also down 603 → 305 ms and total first audio at 1242 ms.
@@ -85,9 +81,10 @@ usable range and off-axis angle; behaviour with the extractor running; and
 capture gain, which sits at max (0 dB) and is fine as shipped. Barge-in cannot
 be tested at all until playback moves to the array.
 
-Related and cheap: **per-turn metrics are printed, never persisted**, so every
-latency number scrolls away with the terminal. Worth a few lines of appending
-to a file before anyone tunes against them.
+Related, and done 2026-08-22: **per-turn metrics now persist** to
+`~/.cache/barnaby/turns.jsonl`, one JSON object per turn, with
+`python -m barnaby --latency` for a median/min/max summary per stage. Latency
+claims are now checkable rather than a matter of who was watching the terminal.
 
 **Deferred to a later conversation: all CAD.** The parametric model in
 build123d is blocked on measuring the HDMI control board, its FPC length, and

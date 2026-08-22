@@ -81,6 +81,24 @@ class BehaviourCfg:
     chirp_on_device_command: bool = True
     sleep_after_frames: int = 2250   # 80 ms frames -> ~3 minutes
 
+    # After Barnaby finishes speaking, keep listening this long so a follow-up
+    # needs no second wake word. 0 disables it and every turn needs waking.
+    #
+    # This is the one knob that trades conversation against false triggers:
+    # the window is an open mic with no wake word in front of it, so anything
+    # the room says during it is a candidate utterance. VAD gates it, but VAD
+    # cannot tell your voice from the television's.
+    follow_up_ms: int = 10_000
+    # Only a *tier 1* answer opens a window. Device commands do not, because
+    # they never reach history, so a follow-up would arrive with nothing to
+    # resolve against — see BACKLOG. Flip when tier 0 exists and can.
+    follow_up_after_tier0: bool = False
+    # A session's history is cleared after this long with no turn, so this
+    # morning's conversation is not still in context tonight. Independent of
+    # the window above: history outlives it, deliberately, so re-waking within
+    # the session still resolves "what about tomorrow".
+    session_idle_ms: int = 180_000   # ~3 min, matching sleep_after_frames
+
 
 @dataclass
 class Config:

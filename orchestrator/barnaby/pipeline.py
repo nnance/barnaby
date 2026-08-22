@@ -1,10 +1,18 @@
 """The turn pipeline.
 
-  IDLE ──wake──> LISTEN ──endpoint──> THINK ──> SPEAK ──> IDLE
-                   ^                                        |
-                   └────────────── barge-in ────────────────┘
+  IDLE ──wake──> LISTEN ──endpoint──> THINK ──> SPEAK ──┬──> IDLE
+                   ^                                     │
+                   ├──────────── barge-in ───────────────┤
+                   └───── follow-up window (10 s) ───────┘
 
-Two rules that are not obvious from the diagram:
+Three rules that are not obvious from the diagram:
+
+  A WAKE WORD OPENS A CONVERSATION, NOT A TURN. After speaking, Barnaby keeps
+  listening for `follow_up_ms` and lets VAD alone start the next turn, so
+  "what about tomorrow" needs no second wake word. The window opens only after
+  playback drains — otherwise his own voice would trigger it, since with output
+  on a separate device there is no AEC. Sessions end on silence, on an empty
+  transcript, or on a tier 0 command; history expires separately, on time.
 
   TIER 0 NEVER TOUCHES A MODEL. "Turn off the kitchen lights" goes to Home
   Assistant, gets a local match in ~50 ms, and Barnaby chirps rather than
@@ -18,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import numpy as np
 
@@ -57,6 +66,7 @@ class Pipeline:
         self.history: list[dict] = []
         self._idle_frames = 0
         self._open_frames = 0        # open-mic trigger, used when wake is None
+        self._last_turn: float | None = None   # perf_counter of the last turn
 
     async def run(self) -> None:
         await self.face.set_mood("neutral")
@@ -103,38 +113,121 @@ class Pipeline:
             return True
         return False
 
-    async def _turn(self, preroll: np.ndarray) -> None:
-        turn = Turn()
-        turn.mark("wake")
-        await self.face.set_mood("surprise")     # the perk
-        await asyncio.sleep(0.12)
+    def _expire_session(self) -> None:
+        """Drop history once a conversation has gone cold.
+
+        Without this `history` is a plain list living as long as the process,
+        so a question at breakfast is still in the model's context at dinner —
+        which is both a wrong-answer risk and a slow context leak.
+        """
+        idle_ms = self.cfg.behaviour.session_idle_ms
+        if not idle_ms or self._last_turn is None or not self.history:
+            return
+        idle = (time.perf_counter() - self._last_turn) * 1000
+        if idle >= idle_ms:
+            log.info("session expired after %.0fs idle — clearing history",
+                     idle / 1000)
+            self.history.clear()
+
+    async def _await_follow_up(self) -> np.ndarray | None:
+        """After speaking, listen for a follow-up without a wake word.
+
+        Returns pre-roll for the next turn if the user starts talking inside
+        the window, otherwise None.
+
+        Two things this is careful about:
+
+        - It waits for playback to actually drain first. Opening while audio is
+          still going means Barnaby's own voice starts the next turn — the same
+          failure barge-in has, and with output on a separate device there is
+          no AEC to save us.
+        - It requires *sustained* speech, not one loud frame, so a cupboard
+          door does not open a turn. Same threshold `--open-mic` uses.
+        """
+        window_ms = self.cfg.behaviour.follow_up_ms
+        if not window_ms:
+            return None
+
+        while self.speaker.is_playing:
+            await asyncio.sleep(0.02)
+
         await self.face.set_mood("listening")
+        self.ep.reset()
+        speech_frames = 0
+        deadline = time.perf_counter() + window_ms / 1000
 
-        audio = await self._record(preroll)
-        turn.mark("endpoint")
+        while time.perf_counter() < deadline:
+            remaining = deadline - time.perf_counter()
+            try:
+                frame = await asyncio.wait_for(self.mic.queue.get(), remaining)
+            except asyncio.TimeoutError:
+                break
+            if self.ep.is_speech(frame):
+                speech_frames += 1
+                if speech_frames >= 3:            # ~240 ms
+                    log.info("follow-up")
+                    return self.mic.preroll()
+            else:
+                speech_frames = 0
 
-        turn.mark("asr_sent")
-        try:
-            text = await self.asr.transcribe(audio)
-        except Exception:                         # noqa: BLE001
-            log.exception("ASR failed")
-            await self.face.set_fault("offline")
-            return
-        turn.mark("asr_done")
-        turn.text = text
-        if not text:
-            await self.face.set_mood("neutral")
-            return
+        log.debug("follow-up window closed")
+        return None
 
-        await self.face.set_mood("curious")       # thinking
-        if await self._try_tier0(text, turn):
+    async def _turn(self, preroll: np.ndarray) -> None:
+        """One wake word, then as many turns as the user keeps feeding.
+
+        A session is a loop rather than a recursive call so a long conversation
+        cannot grow the stack, and so `run()` still sees exactly one `_turn`
+        per wake — idle counting and sleep stay its business.
+        """
+        self._expire_session()
+        woken = True                    # this turn came from the wake word
+
+        while True:
+            turn = Turn()
+            turn.mark("wake")
+            if woken:
+                await self.face.set_mood("surprise")     # the perk
+                await asyncio.sleep(0.12)
+            await self.face.set_mood("listening")
+
+            audio = await self._record(preroll)
+            turn.mark("endpoint")
+
+            turn.mark("asr_sent")
+            try:
+                text = await self.asr.transcribe(audio)
+            except Exception:                     # noqa: BLE001
+                log.exception("ASR failed")
+                await self.face.set_fault("offline")
+                return
+            turn.mark("asr_done")
+            turn.text = text
+            self._last_turn = time.perf_counter()
+            if not text:
+                # Whisper heard nothing usable. In a follow-up window that is
+                # the television, a cough, or the extractor — the common case,
+                # not an error. End the session quietly rather than reopening
+                # and giving the room another go.
+                await self.face.set_mood("neutral")
+                return
+
+            await self.face.set_mood("curious")   # thinking
+            tier0 = await self._try_tier0(text, turn)
+            if not tier0:
+                await self._answer(text, turn)
             turn.report(self.cfg.targets)
-            await self.face.set_mood("neutral")
-            return
+            self._last_turn = time.perf_counter()
 
-        await self._answer(text, turn)
-        turn.report(self.cfg.targets)
-        await self.face.set_mood("neutral")
+            if tier0 and not self.cfg.behaviour.follow_up_after_tier0:
+                await self.face.set_mood("neutral")
+                return
+
+            preroll = await self._await_follow_up()
+            if preroll is None:
+                await self.face.set_mood("neutral")
+                return
+            woken = False
 
     async def _record(self, preroll: np.ndarray) -> np.ndarray:
         """Collect until the endpointer says the user stopped."""

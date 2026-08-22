@@ -78,6 +78,22 @@ face:
 behaviour:
   chirp_on_device_command: true   # beep to acknowledge, speak to inform
   sleep_after_frames: 2250        # ~3 min of nothing -> sleepy
+  # Keep listening this long after Barnaby stops speaking, so a follow-up
+  # needs no second wake word. 0 disables it.
+  #
+  # This is an open mic with no wake word in front of it: VAD decides what
+  # counts as speech, and VAD cannot tell you from the television. 10 s is
+  # generous and conversational; if the kitchen TV starts winning turns, this
+  # is the first number to cut. Watch for turns you did not start.
+  follow_up_ms: 10000
+  # Device commands do not open a window — they never reach history, so a
+  # follow-up would have nothing to resolve "and the counter ones too"
+  # against. Moot until a real tier 0 exists; Control 4 has no intent matcher.
+  follow_up_after_tier0: false
+  # Clear conversation history after this long without a turn. Longer than the
+  # window on purpose: re-waking inside the session should still resolve a
+  # follow-up, but this morning's chat should not be in context tonight.
+  session_idle_ms: 180000
 
 targets:
   device_command_ms: 700

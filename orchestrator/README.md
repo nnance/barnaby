@@ -140,6 +140,13 @@ numbers measured this way are real.
 | TV triggers the wake word | `wake.threshold` up to 0.6–0.7 |
 | Interrupts itself while speaking | `barge_in_ms` up; verify the array's AEC is on |
 | Device commands feel slow | check tier 0 is matching — `--verbose` shows escalations |
+| Answers something nobody asked | `follow_up_ms` down — the TV is landing an utterance in the follow-up window |
+| Have to re-wake him for every follow-up | `follow_up_ms` up, or check it is not 0 |
+| Answers as if mid-conversation, hours later | `session_idle_ms` down — history has not expired |
+
+Latency knobs are worth changing against data rather than impressions:
+`python -m barnaby --latency` summarises the recorded turns per stage, and
+every turn appends to `~/.cache/barnaby/turns.jsonl`.
 
 ## Things that will bite
 
@@ -170,15 +177,26 @@ what's missing, not the wake model, and `listen.py` pins
 `~/.cache/barnaby/silero_vad.onnx` and refetched automatically if missing, so
 there is nothing to do for it either way.
 
-**Nothing survives a reboot.** There is no systemd unit yet, so coming back up
-is manual every time:
+**A reboot is fine now.** `barnaby.service` is a systemd **user** unit with
+lingering enabled, so it starts at boot without anyone logging in. Deploy and
+restart with `./deploy.sh` from the repo root; `journalctl --user -u barnaby -f`
+is the log that used to be whichever terminal you happened to start it in.
+
+It is a user unit rather than a system one because `admin` needs a password for
+sudo, and a deploy that requires a human to type one is a deploy an agent
+cannot do. Everything is `systemctl --user`; sudo is never involved.
+
+Put `HA_TOKEN` in `~/barnaby/barnaby.env` — the unit reads it via
+`EnvironmentFile`, so unlike a shell `export` it survives a reboot. Unset, it
+silently disables tier 0 rather than erroring.
+
+Running it by hand still works and is the right thing when you want the
+diagnostics; stop the service first so it is not holding the mic and port 8711:
 
 ```bash
-cd ~/barnaby && source .venv/bin/activate && python -m barnaby
+systemctl --user stop barnaby
+cd ~/barnaby && source .venv/bin/activate && python -m barnaby --levels
 ```
-
-Any token you `export` is gone too. Writing the unit — with the token in an
-`EnvironmentFile` rather than a shell export — is on the backlog.
 
 ## Not yet wired
 

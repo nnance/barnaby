@@ -1,0 +1,53 @@
+[Unit]
+# Barnaby, as a systemd *user* unit.
+#
+# User rather than system, for one practical reason: `admin` needs a password
+# for sudo, so a system unit cannot be installed or restarted unattended — and
+# the whole point is that either a human or an agent can redeploy without
+# ceremony. The user manager also already has the audio group and the right
+# environment. `loginctl enable-linger admin` is what makes it start at boot
+# rather than at first login; without that it only runs while someone is
+# logged in, which is not what a kitchen robot wants.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp ~/barnaby/barnaby.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now barnaby
+#   loginctl enable-linger admin        # survive logout and reboot
+#
+# Day to day:
+#   systemctl --user restart barnaby    # after an rsync
+#   systemctl --user status barnaby
+#   journalctl --user -u barnaby -f     # the log, which used to be a terminal
+Description=Barnaby orchestrator
+Documentation=https://github.com/nicknance/barnaby
+# The network is not optional — ASR, LLM and TTS all live on the Mac Studio,
+# so a start before DNS works fails on the first turn rather than at startup.
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/barnaby
+# `python -m barnaby`, not a console script: pyproject is setuptools and the
+# package is often installed with plain `pip install -r requirements.txt`,
+# which produces no entry point. The venv python directly avoids needing the
+# activate script in a non-interactive shell.
+ExecStart=%h/barnaby/.venv/bin/python -m barnaby
+# Tokens go here, not in a shell `export` that does not survive a reboot —
+# HA_TOKEN unset silently disables tier 0 rather than erroring, which is a
+# miserable thing to debug. Optional so the unit still starts without the file.
+EnvironmentFile=-%h/barnaby/barnaby.env
+# Unbuffered, or journalctl shows nothing until the process dies.
+Environment=PYTHONUNBUFFERED=1
+
+Restart=on-failure
+RestartSec=3
+# Do not fight a genuinely broken deploy. Five failures inside a minute means
+# the code is wrong, and a restart loop only buries the traceback in the log.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Install]
+WantedBy=default.target

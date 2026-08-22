@@ -64,6 +64,10 @@ Copy the orchestrator over from your laptop:
 rsync -a orchestrator/ barnaby.local:~/barnaby/
 ```
 
+Once the venv exists (below), stop doing this by hand — `./deploy.sh` from the
+repo root rsyncs *and* restarts the service, and `./deploy.sh --install` sets
+up the systemd unit on a fresh Pi. See "Running it as a service" at the end.
+
 Then on the Pi:
 
 ```bash
@@ -206,6 +210,43 @@ Point the face at him from your laptop:
 ```
 http://localhost:5273/?ws=ws://barnaby.local:8711/face
 ```
+
+## Running it as a service
+
+Nothing above survives a logout, let alone a reboot. Install the unit once:
+
+```bash
+./deploy.sh --install      # from the repo root, on your laptop
+```
+
+That copies `barnaby.service` into `~/.config/systemd/user/`, enables it, and
+runs `loginctl enable-linger` — the last part is what makes it start at boot
+rather than at first login.
+
+It is a **user** unit, not a system one, because `admin` needs a password for
+sudo and a deploy should not require a human to type it. So every command is
+`systemctl --user`, never sudo:
+
+```bash
+systemctl --user restart barnaby
+systemctl --user status barnaby
+journalctl --user -u barnaby -f     # the log that used to be your terminal
+```
+
+Put `HA_TOKEN` in `~/barnaby/barnaby.env` (`HA_TOKEN=...`, no `export`), which
+the unit reads via `EnvironmentFile`. A shell `export` does not survive a
+reboot, and an unset token silently disables tier 0 rather than erroring.
+
+After that, deploying is one command from the repo root:
+
+```bash
+./deploy.sh                # rsync + restart
+./deploy.sh --logs         # ...and follow the journal
+```
+
+It checks `is-active` after restarting and dumps the last 30 log lines if the
+service died, because `systemctl restart` happily returns 0 for a unit that
+started and immediately crashed.
 
 ---
 

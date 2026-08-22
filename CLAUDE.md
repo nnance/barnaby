@@ -56,15 +56,17 @@ Directories are `orchestrator/` and `face/`. Older docs call them
 `barnaby-orchestrator/` and `barnaby-face/` — those names do not exist, and the
 rsync line in `pi-setup-guide.md` used one.
 
-**`orchestrator/`** — Python 3.11, runs on the Pi. Deployed by
-`rsync -a orchestrator/ barnaby.local:~/barnaby/`.
+**`orchestrator/`** — Python 3.11, runs on the Pi. Deployed by **`./deploy.sh`**
+from the repo root, which rsyncs and restarts the service (`--logs` to follow
+the journal, `--install` for a fresh Pi). It runs as a systemd **user** unit,
+so `systemctl --user`, never sudo.
 `pipeline.py` state machine · `clients.py` ASR/LLM/TTS/HA · `listen.py` wake +
 VAD · `audio.py` capture/playback · `face.py` WebSocket server · `metrics.py`
 per-turn latency · `config.yaml`
 
 Diagnostics, in the order you want them: `--devices` · `--levels` (per-channel
 dBFS meter) · `--record N` (capture the exact device+channel to a wav) ·
-`--check` · `--say` · `--open-mic`.
+`--check` · `--say` · `--open-mic` · `--latency` (recorded turn latencies).
 
 **`face/`** — TypeScript + Vite + Canvas 2D, 480×480.
 `expressions.ts` state table · `layout.ts` mm constants · `face.ts` renderer ·
@@ -86,9 +88,23 @@ input** (2026-08-22). LLM streaming, sentence-pipelined TTS, playback, face
 channel, per-turn latency instrumentation. Face renderer with six moods, three
 faults, blink-masked shape swaps, pointer-tracked gaze.
 
-Voice is `bm_fable`. Multi-turn context already works — `_answer` feeds the
-last three exchanges back to the LLM — but only if you say the wake word again
-each time.
+Voice is `bm_fable`. **A wake word opens a conversation, not a turn**
+(2026-08-22): after speaking, Barnaby stays listening for `follow_up_ms`
+(10 s) and lets VAD alone start the next turn, so "what about tomorrow" needs
+no second wake word. `_answer` was already feeding the last three exchanges
+back, so follow-ups resolve once they reach it.
+
+The window opens only after playback drains — otherwise his own voice starts a
+turn, the same trap barge-in has, and with output on a separate device there is
+no AEC to save us. A session ends on silence, on an empty transcript (in a
+kitchen that is the TV or the extractor, not a user), or on a tier 0 command.
+History expires separately on `session_idle_ms` (3 min), so breakfast is not
+still in context at dinner.
+
+**10 s is deliberately generous and is the first knob to cut** if the
+television starts winning turns — inside the window there is no wake word in
+front of the mic, and VAD cannot tell a person from a TV. Untested against a
+real kitchen so far.
 
 **Baseline (2026-08-22, live mic on the array, tier 1)** — the real one, with
 wake word, VAD endpointing and beamforming in the path:
@@ -116,8 +132,11 @@ Previous, superseded (2026-08-21, `--say`, no mic): TTFT 680 ms, first clip
 
 Mac shows low GPU and near-zero CPU at this load — lots of headroom.
 
-Metrics print per turn and are **not persisted** — they scroll away with the
-terminal. Worth fixing before tuning anything against them.
+Metrics now **persist** (2026-08-22): every turn appends a JSON object to
+`~/.cache/barnaby/turns.jsonl`, and `python -m barnaby --latency` prints a
+median/min/max summary per stage. It excludes `--say` turns, which have no
+`endpoint` mark and so start their clock later. Latency claims are checkable
+now rather than depending on who was watching the terminal.
 
 **Audio, as of 2026-08-22.** The ReSpeaker XVF3800 **now enumerates** —
 `2886:001a`, ALSA card 3, after a long spell of not appearing in `lsusb`,
@@ -166,10 +185,8 @@ working microphone.** Whisper returned "I love you. I love you." for 7.7 s of
 music with nobody speaking. Confirm against *known* words, which is exactly
 what a real conversational turn does and a `--record` of an empty room does not.
 
-Still unmeasured: usable range and off-axis angle, behaviour with the extractor
-running, and per-turn latency with the array in the path — the numbers in the
-baseline table above are all close-talk. Metrics print per turn but are not
-persisted, so they scroll away with the terminal.
+Still unmeasured: usable range and off-axis angle, and behaviour with the
+extractor running.
 
 Three diagnostics were added while chasing the missing device: `--levels`
 (per-channel dBFS meter), `--record N` (capture the exact device+channel the
@@ -179,8 +196,8 @@ instead of stalling for the full 15 s cap.
 **Wake word:** validated with openWakeWord's pretrained `hey_jarvis`. A custom
 "barnaby" model is still untrained.
 
-**Not working / not built:** custom wake word, follow-up turns without
-re-waking, the Node agent server, any home automation at all (the `home_assistant`
+**Not working / not built:** custom wake word,
+the Node agent server, any home automation at all (the `home_assistant`
 block in `config.yaml` points at an instance that does not exist, so tier 0 is
 dead and everything hits the LLM), tool calling, camera and face tracking,
 identity, ESP32, CAD.
@@ -264,7 +281,8 @@ identity, ESP32, CAD.
 | openwakeword needs `download_models()` | Mandatory **even with a custom model** — the shared melspectrogram and embedding models are separate. Skip it and `Model(...)` fails as if your `.onnx` were corrupt. `listen.py` pins `inference_framework="onnx"`, so the ONNX variants specifically must be present |
 | `preroll_ms` reaches into the wake phrase | At 500 ms Whisper transcribes the wake word as part of the question ("Harvest, what's the weather"). Now 250. Retune per wake model — detection latency differs. Matters most for intent matching, which is brittle to a leading junk word |
 | Kokoro voice list | Undocumented: `curl http://<mac>:8002/v1/audio/voices` → 53 voices. `<lang><gender>_<name>`, a=American b=British, f/m. Currently `bm_fable` |
-| Pi needs manual start after reboot | No systemd unit. `cd ~/barnaby && source .venv/bin/activate && python -m barnaby`. `HA_TOKEN` is an `export` that does not survive, and unset silently disables tier 0 rather than erroring |
+| Deploying to the Pi | `./deploy.sh` — rsyncs and restarts the service. It is a **user** unit, so `systemctl --user`, never sudo (`admin` needs a password for sudo, which is why it is not a system unit). `journalctl --user -u barnaby -f` for the log |
+| `HA_TOKEN` | Put it in `~/barnaby/barnaby.env`, read by the unit's `EnvironmentFile`. A shell `export` does not survive a reboot, and unset silently disables tier 0 rather than erroring |
 | face `check-fit` was unrunnable | `package.json` pointed at `scripts/check-fit.ts`; the file is `src/check-fit.ts`. Fixed 2026-08-22 and wired into `build`, so the geometry regression actually gates it now |
 
 ---
