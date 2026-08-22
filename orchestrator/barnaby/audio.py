@@ -47,6 +47,52 @@ class Microphone:
         )
         self._stream: sd.InputStream | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._dropped = 0
+
+    def flush(self) -> None:
+        """Discard everything queued, so the next read starts from now.
+
+        Nothing drains the queue during ASR, the LLM stream or playback, so by
+        the end of a turn it holds several seconds of whatever the room did
+        while Barnaby was busy — including Barnaby. Any reader that means
+        "listen from this moment" has to flush first, or it is really asking
+        "what happened five seconds ago".
+        """
+        while True:
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+    def _put(self, frame: np.ndarray) -> None:
+        """Enqueue one frame, dropping the oldest if the reader has fallen
+        behind. Runs on the event loop, not the audio thread.
+
+        This must never raise. It is invoked via call_soon_threadsafe, so an
+        exception here does not propagate to the caller — it lands in the
+        loop's exception handler and prints a traceback per dropped frame,
+        which is how a full queue turned into thousands of log lines.
+
+        Dropping the *oldest* rather than the newest matters. The queue is the
+        live microphone; when it overflows, the stale end is audio from before
+        whatever the reader is now waiting for, and handing that over means
+        replaying the past — for the follow-up window, that was Barnaby's own
+        voice from several seconds earlier.
+        """
+        try:
+            self.queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            self._dropped += 1
+            if self._dropped % 100 == 1:
+                log.debug("input queue full — dropped %d frame(s)", self._dropped)
+            try:
+                self.queue.put_nowait(frame)
+            except asyncio.QueueFull:
+                pass
 
     def _callback(self, indata, _frames, _time, status) -> None:
         if status:
@@ -54,10 +100,7 @@ class Microphone:
         frame = indata[:, self.channel].copy()
         self.ring.append(frame)
         if self._loop is not None:
-            try:
-                self._loop.call_soon_threadsafe(self.queue.put_nowait, frame)
-            except asyncio.QueueFull:
-                pass          # dropping a frame beats blocking the audio thread
+            self._loop.call_soon_threadsafe(self._put, frame)
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()

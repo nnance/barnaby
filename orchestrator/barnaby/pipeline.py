@@ -90,6 +90,10 @@ class Pipeline:
 
             if self._triggered(frame):
                 await self._turn(preroll=self.mic.preroll())
+                # Same reason as the follow-up window: what queued up during
+                # the turn is the past, and feeding several seconds of it to
+                # the wake detector risks waking on Barnaby's own reply.
+                self.mic.flush()
                 self._idle_frames = 0
                 continue
 
@@ -150,6 +154,12 @@ class Pipeline:
 
         while self.speaker.is_playing:
             await asyncio.sleep(0.02)
+
+        # Everything queued up to here is the past — the room while Whisper,
+        # the LLM and playback were busy, Barnaby's own voice included. Left
+        # in, it is read in a single burst the instant the window opens, which
+        # spends the window before the user has said anything. Listen from now.
+        self.mic.flush()
 
         await self.face.set_mood("listening")
         self.ep.reset()
