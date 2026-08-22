@@ -39,11 +39,20 @@ from .metrics import Turn
 
 log = logging.getLogger("barnaby.pipeline")
 
+# Brevity is a latency feature, not a style preference. Barnaby speaks at
+# roughly 2.4 words per second, and the follow-up window only opens once he
+# stops — so every extra sentence is another two or three seconds during which
+# the user cannot say anything and concludes the session is dead. A 28-word
+# answer took twelve seconds and made the feature look broken.
 SYSTEM = """You are Barnaby, a companion robot on a kitchen counter in a shared home.
 
-Answer in one or two short sentences. You are being spoken aloud, so never use
-markdown, lists, or symbols — write as you would speak. If you do not know
-something, say so plainly rather than guessing.
+Answer in ONE short sentence. Two only if the question genuinely cannot be
+answered in one. You are being spoken aloud and the person is waiting, so
+brevity matters more than completeness — give the direct answer and stop,
+without preamble, restating the question, or offering to elaborate.
+
+Never use markdown, lists, or symbols — write as you would speak. If you do
+not know something, say so plainly rather than guessing.
 
 Never read out personal information unless you have been told who is asking."""
 
@@ -133,7 +142,7 @@ class Pipeline:
                      idle / 1000)
             self.history.clear()
 
-    async def _await_follow_up(self) -> np.ndarray | None:
+    async def _await_follow_up(self, turn: Turn | None = None) -> np.ndarray | None:
         """After speaking, listen for a follow-up without a wake word.
 
         Returns pre-roll for the next turn if the user starts talking inside
@@ -159,6 +168,11 @@ class Pipeline:
         # own voice. The empty transcript that produced then ended the session
         # silently, which is exactly the "it needs the wake word again" report.
         await self.speaker.wait_until_idle()
+        if turn is not None:
+            turn.mark("playback_done")
+            log.info("spoke for %.1fs; listening %d ms for a follow-up",
+                     (turn.since("speaking", "playback_done") or 0) / 1000,
+                     window_ms)
 
         # Everything queued up to here is the past — the room while Whisper,
         # the LLM and playback were busy, Barnaby's own voice included. Left
@@ -185,7 +199,7 @@ class Pipeline:
             else:
                 speech_frames = 0
 
-        log.debug("follow-up window closed")
+        log.info("follow-up window closed after %d ms — session over", window_ms)
         return None
 
     async def _turn(self, preroll: np.ndarray) -> None:
@@ -238,7 +252,7 @@ class Pipeline:
                 await self.face.set_mood("neutral")
                 return
 
-            preroll = await self._await_follow_up()
+            preroll = await self._await_follow_up(turn)
             if preroll is None:
                 await self.face.set_mood("neutral")
                 return

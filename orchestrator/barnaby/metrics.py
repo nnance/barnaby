@@ -35,9 +35,15 @@ LOG_PATH = Path.home() / ".cache" / "barnaby" / "turns.jsonl"
 # In a streaming pipeline SPEAKING happens BEFORE tts_done — audio starts on
 # sentence one while later sentences are still being synthesised. Listing
 # tts_done first produced a negative delta and a meaningless report.
+# `tts_done` is when *synthesis* finished, not when Barnaby stopped talking —
+# audio is still playing long after it. Without `playback_done` the table ends
+# at ~400 ms for a turn where he speaks for twelve seconds, which hid exactly
+# that: a follow-up window that opens only once he finishes is useless if
+# nothing reports how long finishing takes.
 ORDER = [
     "wake", "endpoint", "asr_sent", "asr_done", "tier0_done",
-    "llm_sent", "first_token", "first_sentence", "speaking", "tts_done", "done",
+    "llm_sent", "first_token", "first_sentence", "speaking", "tts_done",
+    "playback_done", "done",
 ]
 
 
