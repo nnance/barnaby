@@ -71,6 +71,7 @@ sudo apt install portaudio19-dev libsndfile1   # sounddevice/soundfile need thes
 uv venv && uv pip install -e .
 export HA_TOKEN=...            # long-lived token from your HA profile
 python -m barnaby --devices    # find the XVF3800, put its index in config.yaml
+python -m barnaby --levels     # per-channel meter — confirm it actually hears you
 python -m barnaby --check      # confirm all four services are reachable
 python -m barnaby
 ```

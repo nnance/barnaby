@@ -11,9 +11,19 @@ audio:
   output_device: "USB PnP"
   input_channels: null   # null = device native. XVF3800 exposes several.
   input_channel: 0       # ch0 = beamformed + echo-cancelled. Raw mics are 1..n.
-  preroll_ms: 500        # prepended on wake so the first word isn't clipped
+  # Audio from *before* the trigger, prepended so the first word isn't clipped.
+  # It reaches back into the wake phrase too, so too much of it and Whisper
+  # transcribes the wake word as part of the question ("Harvest, what's the
+  # weather"). Too little and you lose the user's first syllable. 250 is a
+  # starting point; retune against the real barnaby model, whose detection
+  # latency will differ from hey_jarvis's.
+  preroll_ms: 250
   hangover_ms: 350       # silence before we call it done — the latency knob
   min_speech_ms: 250
+  max_utterance_ms: 15000
+  # Raise toward 0.7 if turns run all the way to max_utterance_ms — that means
+  # room noise is reading as speech and the hangover never elapses.
+  vad_threshold: 0.5
   barge_in_ms: 200
   # OFF while output goes through a separate device. The array's AEC has no
   # reference for audio it didn't play, so Barnaby hears himself and cuts
@@ -26,7 +36,7 @@ audio:
   playback_rate: 24000
 
 wake:
-  model: models/barnaby.onnx
+  model: hey_jarvis
   threshold: 0.5         # raise if the TV triggers it
 
 mac:
@@ -40,7 +50,9 @@ mac:
   llm_model: qwen3.8-27b-4bit
   tts_url: http://nicks-mac-studio.local:8002/v1
   tts_model: kokoro
-  tts_voice: af_heart
+  # `curl http://<mac>:8002/v1/audio/voices` lists all 53.
+  # Naming is <lang><gender>_<name>: a=American b=British, f=female m=male.
+  tts_voice: bm_fable
   max_tokens: 400
   temperature: 0.4
 
