@@ -6,12 +6,16 @@
    path; the descriptor says 2 channels, beamformed on-board, no raw capsules.
 
    What is **not** done, because it needs someone talking to it:
-   - **Far-field transcription.** Every test so far recorded an empty room, and
-     Whisper hallucinated confidently into the silence. Speak at counter
-     distance, off-axis, and confirm the transcript.
-   - **Gain.** Capture is at max (0 dB) and ambience alone peaks near −1 dBFS.
-     Almost certainly wants turning down; `--levels` while speaking is the
-     check, then `amixer -c 3 sset Headset,0 Capture <n>`.
+   Note that **music was playing during every test recording so far**, so all
+   of it needs redoing in a quiet room — the measurements below are unusable.
+
+   - **Far-field transcription.** Speak at counter distance, off-axis, and
+     confirm the transcript. Whisper returned plausible sentences from the
+     music alone, so only a transcript of *known* words proves anything.
+   - **Gain.** Capture is at max (0 dB). Whether that is too hot is unknown —
+     the earlier "peaks near −1 dBFS" reading was music, not ambience. Measure
+     the floor in a quiet room, then `--levels` while speaking, and only then
+     `amixer -c 3 sset Headset,0 Capture <n>` if it needs it.
    - **Wake-word range** at the same distances, now that beamforming is back.
    - **Barge-in stays off** until the JST pigtail moves playback to the array —
      AEC has no reference signal until then, so this cannot be tested yet.

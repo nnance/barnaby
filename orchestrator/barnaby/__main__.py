@@ -56,10 +56,11 @@ def levels(cfg: Config) -> int:
 
     Two jobs. It answers "is anything reaching the mic at all", which silence
     and a misconfigured device look identical without. It is also how you set
-    capture gain: the array ships at max (0 dB), hot enough that room ambience
-    alone peaks near −1 dBFS, so watch the bars while speaking at counter
-    distance and back it off with `amixer -c <N> sset Headset,0 Capture <n>`
-    until speech peaks leave headroom.
+    capture gain: the array ships at max (0 dB). Watch the bars in a *quiet*
+    room to find the floor, then while speaking at counter distance, and back
+    it off with `amixer -c <N> sset Headset,0 Capture <n>` if speech peaks lack
+    headroom. Kill any music first — it reads as a hot noise floor and will
+    talk you into turning the gain down when nothing is wrong.
 
     Opens at the same rate and frame size the pipeline uses, so a device that
     fails here fails there too.

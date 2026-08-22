@@ -117,17 +117,24 @@ Two corrections to what was assumed while it was missing:
   "pick ch0 or you get a bare capsule" trap does not exist on this firmware.
   Measured on room ambience the channels are distinct but correlated (r = 0.89)
   with ch0 ~7 dB hotter. Use ch0.
-- **Capture gain sits at max** (`Headset Capture Volume` 60/60 = 0 dB), which
-  puts quiet room ambience at −26 dBFS RMS and peaks near −1 dBFS. That is hot
-  enough to be worth turning down once there is speech to tune against.
+- **Capture gain sits at max** (`Headset Capture Volume` 60/60 = 0 dB).
+  Whether that is too hot is **not yet known** — see below.
 
 **Not yet validated against speech.** Everything above is descriptor
-inspection plus ambient-noise measurement. Capture through the pipeline's own
-`Microphone` path works and Whisper returns 200s, but every test recording so
-far caught an empty room, and Whisper duly hallucinated ("I love you.") — its
-standard behaviour on silence, and a good reminder that a plausible transcript
-is not evidence of a working mic. Far-field quality, wake-word range and the
-right gain setting all still need a person talking to it.
+inspection. Capture through the pipeline's own `Microphone` path works and
+Whisper returns 200s, but there was **music playing during every test
+recording**, which spoils them for two separate purposes:
+
+- The levels measured (−26 dBFS RMS, peaks near −1 dBFS) are music plus room,
+  not a noise floor, so they support no conclusion about capture gain. Measure
+  it again in a quiet room before touching `amixer`.
+- Whisper returned "I love you. I love you." for 7.7 s. That was first read as
+  hallucination-into-silence; with the music known it is more likely the song.
+  Either way it is not evidence of a working microphone — which is the point
+  worth keeping: a fluent transcript is the failure mode, not the pass signal.
+
+Far-field quality, wake-word range and the right gain setting all still need a
+person talking to it, **in a quiet room**.
 
 Three diagnostics were added while chasing the missing device: `--levels`
 (per-channel dBFS meter), `--record N` (capture the exact device+channel the
