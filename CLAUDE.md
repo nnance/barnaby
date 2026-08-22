@@ -158,11 +158,32 @@ MPR121 · IMU · HA box + ZBT-1
 1. **Get the ReSpeaker enumerating.** Everything about far-field, AEC and
    barge-in is blocked on it, and tuning done against a close-talk mic will not
    transfer.
-2. **Follow-up turns.** History already works; the gap is that every turn needs
-   the wake word. Wanted: a short window after Barnaby finishes speaking where
-   VAD alone starts a turn. Decisions to make — how long the window stays open,
-   whether tier 0 chirps open one too, and when history should lapse (it never
-   expires today, so this morning's conversation is still in context tonight).
+2. **Active session — the wake word should open a conversation, not a turn.**
+   Say "Barnaby, what's the weather", then just say "what about tomorrow"
+   without waking him again. Today every single turn needs the wake word, which
+   makes talking to him feel like issuing commands rather than having a
+   conversation.
+
+   The context half is already built: `_answer` feeds `history[-6:]` back to
+   the LLM, so follow-ups already resolve correctly once they reach it. The
+   missing half is the listening window — after Barnaby stops speaking, stay
+   open for a few seconds and let VAD alone start the next turn, the way
+   `--open-mic` does but time-boxed. Safe to build before the array arrives,
+   because the window opens *after* playback ends and so needs no AEC.
+
+   Four decisions:
+   - **How long the window stays open.** It inherits `--open-mic`'s weakness —
+     an open mic in a kitchen will sometimes answer the television. Short
+     enough that this is rare, long enough to be worth having.
+   - **Whether tier 0 opens one.** Device commands return before `_answer` and
+     never touch history, so "turn off the kitchen lights" then "and the
+     counter ones too" has nothing to work with. Arguably the bigger gap.
+   - **When the session ends.** History never expires today — it is a plain
+     list living as long as the process, so this morning's conversation is
+     still in context tonight. `sleep_after_frames` (~3 min idle) is the
+     natural place to clear it.
+   - **What the face shows** while the window is open, so it is visible that he
+     is still listening. `listening` already exists.
 3. **Wake word.** Train "barnaby" from synthetic speech — `hey_jarvis` already
    proves the path — then test against the real kitchen, TV on, extractor
    running. Retune `preroll_ms` at the same time; too much of it and the wake
