@@ -218,14 +218,61 @@ MPR121 · IMU · HA box + ZBT-1
 
 ## Software
 
-**Dependencies:** Python 3.11 · Poetry or pip · Node.js (for face renderer) · ONNX Runtime (for openwakeword) · Vite (for face renderer)
+**No Poetry, no global installs.** The Pi uses `uv`; the face uses `pnpm`
+(pinned in `devEngines`, and there is a `pnpm-lock.yaml`). ONNX Runtime and
+Vite are ordinary declared dependencies — nothing to install by hand.
 
-**Setup:** 
+**Rebuilding the Pi venv from scratch.** The one that actually matters, because
+`rm -rf .venv` also destroys the openWakeWord model files, which live inside
+site-packages and are *not* re-downloaded by the install:
 
-1. **Python environment:** `python -m venv .venv && source .venv/bin/activate`
-2. **Install Python dependencies:** `poetry install` or `pip install -r requirements.txt`
-3. **Node.js environment:** `cd face && npm install` (for face renderer)
-4. **ONNX Runtime:** Ensure ONNX Runtime is installed and accessible for openwakeword.
-5. **Vite:** Ensure Vite is installed globally or locally for the face renderer.
-6. **Environment variables:** Set any required environment variables, such as API keys or configuration paths, as needed for your setup.
-7. **Run the application:** Follow the specific instructions for running the main application and the face renderer, ensuring all dependencies and environment variables are correctly set.
+```bash
+ssh barnaby.local
+cd ~/barnaby
+deactivate 2>/dev/null; rm -rf .venv
+
+uv venv --python 3.11          # NOT `python -m venv` — see below
+source .venv/bin/activate
+python -V                      # confirm 3.11.x before going further
+uv pip install -e '.[wake]'
+python -c "import openwakeword.utils as u; u.download_models()"
+```
+
+**`--python 3.11` is load-bearing.** Pi OS ships 3.13, openWakeWord
+hard-depends on `tflite-runtime`, and there are no cp313 wheels — a plain
+`python -m venv` gives you `No solution found when resolving dependencies` on
+the `[wake]` extra. uv downloads a standalone 3.11 build for you.
+
+System libraries, only needed if the Pi itself was reimaged (they are apt, not
+pip, and outlive any venv):
+
+```bash
+sudo apt install -y portaudio19-dev libsndfile1 python3-dev
+```
+
+**Deploy from the laptop**, remembering that `-a` overwrites the Pi's
+`config.yaml` with the repo's:
+
+```bash
+rsync -a orchestrator/ barnaby.local:~/barnaby/
+```
+
+**Then verify in this order** — each step's failure is unambiguous only if the
+one before it passed:
+
+```bash
+python -m barnaby --devices    # is the input device even there?
+python -m barnaby --levels     # speak: -20..-30 dBFS, silence near -60
+python -m barnaby --check      # are the Mac services reachable?
+python -m barnaby              # hey_jarvis
+```
+
+**What survives a venv rebuild:** the Silero VAD model, cached at
+`~/.cache/barnaby/silero_vad.onnx`, and refetched automatically if missing.
+**What does not:** the openWakeWord models. **What does not survive a reboot:**
+the venv activation and any `export`ed token — there is no systemd unit yet.
+
+Fallback if packaging misbehaves: `uv pip install -r requirements.txt`, then
+`python -m barnaby` from the project directory. No build step, no setuptools.
+
+**Face renderer:** `cd face && pnpm install && pnpm dev`.
