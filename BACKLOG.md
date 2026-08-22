@@ -1,34 +1,10 @@
 ## Next, in order
 
-1. **Active session — built 2026-08-22, needs a kitchen test.** A wake word
-   now opens a conversation: after speaking, Barnaby stays listening for
-   `follow_up_ms` and VAD alone starts the next turn. The window opens only
-   after playback drains, so his own voice cannot trigger it. Sessions end on
-   silence, on an empty transcript, or on a tier 0 command; history expires
-   separately on `session_idle_ms` (3 min).
-
-   How the four decisions were settled:
-   - **Window: 10 s**, chosen deliberately generous. Tested only against fakes.
-   - **Tier 0 does not open one** (`follow_up_after_tier0: false`) — device
-     commands never reach history, so a follow-up would have nothing to
-     resolve against. Moot until a real tier 0 exists.
-   - **History expires on time**, not with the window, so re-waking inside a
-     session still resolves "what about tomorrow".
-   - **Face shows `listening`** while the window is open.
-
-   What is left:
-   - **Find the real number for `follow_up_ms`.** 10 s is an open mic with no
-     wake word in front of it, in a room with a television, and VAD cannot
-     tell a person from a TV. Expect to cut it. Watch for turns nobody started.
-   - **Check the empty-transcript exit is right.** A turn the TV opened ends
-     the session silently, which is the intent; confirm it does not also eat
-     legitimate quiet follow-ups.
-
-2. **Wake word.** Train "barnaby" from synthetic speech — `hey_jarvis` already
+1. **Wake word.** Train "barnaby" from synthetic speech — `hey_jarvis` already
    proves the path — then test against the real kitchen, TV on, extractor
    running. Retune `preroll_ms` at the same time; too much of it and the wake
    phrase lands in the transcript.
-3. **The Node agent server on the Mac.** Stand it up as a pure passthrough
+2. **The Node agent server on the Mac.** Stand it up as a pure passthrough
    first, on its own port, so the Pi change is one line — point `llm_url` at it
    and leave ASR and TTS talking to rapid-mlx directly, off the critical path.
    Get that boring before adding anything.
@@ -45,7 +21,7 @@
    - It is also the natural place to route per-turn between the local model and
      a frontier one, which may be what makes tool calling work at all. Privacy
      cost, chosen deliberately.
-4. **Tool calling.** Tier 1 answers but cannot act. Two things to plan for:
+3. **Tool calling.** Tier 1 answers but cannot act. Two things to plan for:
    - **It breaks the 2 s budget inherently.** A tool turn is two inference
      rounds before the first speakable token — ~1.4 s before the tool even
      runs. Decide what he does in the gap; the face already goes `curious`, but
@@ -58,20 +34,31 @@
      allowlist rather than an open plugin surface, confirmation for side
      effects. Benchmark reliability too — small models are weak at multi-step
      tool use.
-5. **Identity, or some way to know who is talking.** No face or voice
+4. **Identity, or some way to know who is talking.** No face or voice
    recognition, so personal data stays off limits and the system prompt is the
    only thing enforcing it. Blocks anything personal in tool calling.
-6. **TTFT — mostly resolved itself, but find out why.** It was 680 ms and the
-   largest stage; on the 2026-08-22 live-mic run it was **357 ms**, with
-   Kokoro's first clip also down 603 → 305 ms and total first audio at 1242 ms.
-   Nothing was changed to cause that, so the number is not yet trustworthy —
-   warm weights on the Mac is the obvious guess. Confirm it holds from cold
-   before treating the headroom as real. Still worth confirming `--no-think` is
-   actually in effect. 8-bit remains interesting for tool-call reliability
-   rather than for latency, and there is now clearly room for it.
-7. **Camera + face tracking** when the Wide arrives — emits `look` on the face
+5. **TTFT, the largest stage we control.** Median 640 ms over 12 recorded
+   turns, spread 345-760. An earlier single turn read 357 ms and was briefly
+   believed to be an improvement; it was just the fast end of the spread, so
+   there is nothing to explain and nothing has regressed. Still worth
+   confirming `--no-think` is actually in effect. 8-bit is interesting for
+   tool-call reliability rather than latency — total first audio is 1608 ms
+   against a 2000 ms budget, so the headroom is thinner than it looked.
+6. **Camera + face tracking** when the Wide arrives — emits `look` on the face
    channel, which the renderer already consumes.
-8. **ESP32 firmware.**
+7. **ESP32 firmware.**
+
+**Working, but only tested in a quiet room — the active session.** A wake word
+opens a conversation and a follow-up needs no second wake word (confirmed
+2026-08-22, including a pronoun resolved against history). Two things to watch
+now that it is in daily use:
+
+- **`follow_up_ms` is 10 s and the TV has not been tried against it.** Inside
+  the window there is no wake word, only VAD, which cannot tell a person from
+  a television. Cut it if turns start appearing that nobody began.
+- **The wait before the window opens is the answer length**, since it opens
+  only once playback drains. A 10 s answer means 10 s before a follow-up is
+  possible. `max_tokens` is 400 by choice; that is the cost.
 
 **Not blocking anything, so unnumbered — acoustic characterisation.** The array
 is confirmed working end to end (2026-08-22), including with music playing, and

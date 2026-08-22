@@ -101,34 +101,45 @@ kitchen that is the TV or the extractor, not a user), or on a tier 0 command.
 History expires separately on `session_idle_ms` (3 min), so breakfast is not
 still in context at dinner.
 
+**Confirmed working 2026-08-22**, wake word through to a pronoun-dependent
+follow-up: "why is the sky blue" → spoke 9.2 s → window opened → "is that how
+the rainbow works?" answered with no wake word, resolving "that" against
+history. Session then closed cleanly on silence.
+
 **10 s is deliberately generous and is the first knob to cut** if the
 television starts winning turns — inside the window there is no wake word in
-front of the mic, and VAD cannot tell a person from a TV. Untested against a
-real kitchen so far.
+front of the mic, and VAD cannot tell a person from a TV. Not yet tested
+against a TV actually running.
 
-**Baseline (2026-08-22, live mic on the array, tier 1)** — the real one, with
-wake word, VAD endpointing and beamforming in the path:
+Note the wait before the window opens is the *answer length*: it opens only
+once playback drains, so a 10 s answer means 10 s before a follow-up is
+possible. `max_tokens` is deliberately back at 400 — Nick prefers the fuller
+answers, and this is the cost.
+
+**Baseline (2026-08-22, live mic on the array, tier 1)** — medians over 12
+recorded turns, with wake word, VAD endpointing and beamforming in the path:
 
 ```
-wake -> endpoint              2833.0 ms   ← the user talking; not our latency
+wake -> endpoint              2821.2 ms   ← the user talking; not our latency
 endpoint -> asr_sent             0.0 ms
-asr_sent -> asr_done           379.1 ms   ← Whisper on the Mac
-asr_done -> llm_sent             0.1 ms   ← no tier 0; nothing to match against
-llm_sent -> first_token        357.5 ms
-first_token -> first_sentence  200.9 ms   ← buffering to a clause boundary
-first_sentence -> speaking     304.5 ms   ← Kokoro first clip
-TIME TO FIRST AUDIO           1242.1 ms   budget 2000  OK
+asr_sent -> asr_done           408.4 ms   ← Whisper on the Mac
+asr_done -> llm_sent             0.2 ms   ← no tier 0; nothing to match against
+llm_sent -> first_token        640.5 ms   ← 345-760, the widest-spread stage
+first_token -> first_sentence  275.9 ms   ← buffering to a clause boundary
+first_sentence -> speaking     285.9 ms   ← Kokoro first clip
+TIME TO FIRST AUDIO           1608.2 ms   budget 2000 — 12/12 within it
 ```
 
-Faster than the older `--say` baseline (1488 ms) despite doing strictly more
-work. Two stages moved: **TTFT 680 → 357 ms**, which was the largest stage and
-the standing suspicion about `--no-think`; and Kokoro's first clip 603 → 305 ms.
-Neither was changed deliberately, so treat the improvement as unexplained —
-warm weights on the Mac is the obvious guess. `wake -> endpoint` is the user
-speaking and does not count against the budget.
+**Read these rather than any single turn.** An earlier one-off showed TTFT at
+357 ms and was written up here as an unexplained improvement over the 680 ms
+`--say` baseline; across 12 turns the median is 640 ms with a 345-760 ms
+spread, so that reading was just the fast end of normal variance. Nothing
+improved and nothing regressed — the sample was too small to say either.
+Getting this wrong in the obvious direction is what persistence is for.
 
-Previous, superseded (2026-08-21, `--say`, no mic): TTFT 680 ms, first clip
-603 ms, 1488 ms to first audio.
+`wake -> endpoint` is the user speaking and does not count against the budget.
+
+Superseded (2026-08-21, `--say`, no mic): TTFT 680 ms, 1488 ms to first audio.
 
 Mac shows low GPU and near-zero CPU at this load — lots of headroom.
 
@@ -279,6 +290,8 @@ identity, ESP32, CAD.
 | **Every 15 s turn has two opposite causes** | Endpointing needs `min_speech` *before* it can fire, so a dead input can never end a turn early — it runs to `max_utterance_ms` and transcribes to nothing, exactly like an input so hot that noise reads as continuous speech. Identical symptom, opposite fix. `--levels` tells them apart |
 | Wrong `input_device` fails silently | The Waveshare exposes 2 input channels, so pointing `input_device` at it *succeeds* and hands you a bare mic with no beamforming. Looks like "Whisper is bad." `--record N` then `aplay` is the check — `arecord -c 2` can't, it plays both channels |
 | openwakeword needs `download_models()` | Mandatory **even with a custom model** — the shared melspectrogram and embedding models are separate. Skip it and `Model(...)` fails as if your `.onnx` were corrupt. `listen.py` pins `inference_framework="onnx"`, so the ONNX variants specifically must be present |
+| A wrong Silero window size is **silent** | The model accepts any size, runs, and returns ~0.001 for every frame forever. `WINDOW` was 512 against an export wanting 576: measured on real speech, 576 detects 65-70% of frames and 512 detects **0%**. Symptom is a VAD that never fires, so endpointing falls through to the 3 s no-speech bail-out and the follow-up window hears nothing — while Whisper still transcribes fine, because it never needed the VAD. `load()` now probes for inertness and warns |
+| "no speech detected in 3.0s" on a turn that transcribed perfectly | Not a microphone problem. It means the VAD returned False for every frame while Whisper heard you fine — i.e. the VAD is broken, not the input. This sat in the log for hours reading as a level problem |
 | `preroll_ms` reaches into the wake phrase | At 500 ms Whisper transcribes the wake word as part of the question ("Harvest, what's the weather"). Now 250. Retune per wake model — detection latency differs. Matters most for intent matching, which is brittle to a leading junk word |
 | Kokoro voice list | Undocumented: `curl http://<mac>:8002/v1/audio/voices` → 53 voices. `<lang><gender>_<name>`, a=American b=British, f/m. Currently `bm_fable` |
 | Reading the service log | `journalctl --user-unit barnaby -f`. **Not** `--user -u barnaby`, which looks in the user's own journal, finds nothing, and prints "No journal files were found" as if the service had never run. The unit's stdout goes to the *system* journal; `admin` reads it via the `adm` group |
