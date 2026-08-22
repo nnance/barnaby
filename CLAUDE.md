@@ -90,16 +90,34 @@ Voice is `bm_fable`. Multi-turn context already works — `_answer` feeds the
 last three exchanges back to the LLM — but only if you say the wake word again
 each time.
 
-**Baseline (2026-08-21, `--say`, no mic):**
+**Baseline (2026-08-22, live mic on the array, tier 1)** — the real one, with
+wake word, VAD endpointing and beamforming in the path:
 
 ```
-llm_sent -> first_token        680 ms   ← largest stage; verify --no-think
-first_token -> first_sentence  205 ms   ← buffering to a clause boundary
-first_sentence -> speaking     603 ms   ← Kokoro first clip
-TIME TO FIRST AUDIO           1488 ms   budget 2000  OK
+wake -> endpoint              2833.0 ms   ← the user talking; not our latency
+endpoint -> asr_sent             0.0 ms
+asr_sent -> asr_done           379.1 ms   ← Whisper on the Mac
+asr_done -> llm_sent             0.1 ms   ← no tier 0; nothing to match against
+llm_sent -> first_token        357.5 ms
+first_token -> first_sentence  200.9 ms   ← buffering to a clause boundary
+first_sentence -> speaking     304.5 ms   ← Kokoro first clip
+TIME TO FIRST AUDIO           1242.1 ms   budget 2000  OK
 ```
+
+Faster than the older `--say` baseline (1488 ms) despite doing strictly more
+work. Two stages moved: **TTFT 680 → 357 ms**, which was the largest stage and
+the standing suspicion about `--no-think`; and Kokoro's first clip 603 → 305 ms.
+Neither was changed deliberately, so treat the improvement as unexplained —
+warm weights on the Mac is the obvious guess. `wake -> endpoint` is the user
+speaking and does not count against the budget.
+
+Previous, superseded (2026-08-21, `--say`, no mic): TTFT 680 ms, first clip
+603 ms, 1488 ms to first audio.
 
 Mac shows low GPU and near-zero CPU at this load — lots of headroom.
+
+Metrics print per turn and are **not persisted** — they scroll away with the
+terminal. Worth fixing before tuning anything against them.
 
 **Audio, as of 2026-08-22.** The ReSpeaker XVF3800 **now enumerates** —
 `2886:001a`, ALSA card 3, after a long spell of not appearing in `lsusb`,
@@ -127,21 +145,31 @@ Two corrections to what was assumed while it was missing:
 - **Capture gain sits at max** (`Headset Capture Volume` 60/60 = 0 dB).
   Whether that is too hot is **not yet known** — see below.
 
-**Not yet validated against speech.** Everything above is descriptor
-inspection. Capture through the pipeline's own `Microphone` path works and
-Whisper returns 200s, but there was **music playing during every test
-recording**, which spoils them for two separate purposes:
+**Confirmed working on the array (2026-08-22)** — wake word, far-field capture
+and a full conversational turn, reported by Nick against a live run. This is
+the first end-to-end validation with beamforming in the path; everything before
+it was close-talk on the Waveshare mic.
 
-- The levels measured (−26 dBFS RMS, peaks near −1 dBFS) are music plus room,
-  not a noise floor, so they support no conclusion about capture gain. Measure
-  it again in a quiet room before touching `amixer`.
-- Whisper returned "I love you. I love you." for 7.7 s. That was first read as
-  hallucination-into-silence; with the music known it is more likely the song.
-  Either way it is not evidence of a working microphone — which is the point
-  worth keeping: a fluent transcript is the failure mode, not the pass signal.
+It was working **with music playing in the room**, which is a stronger result
+than a quiet-room test would have been and the first real evidence the
+beamformer is earning its place.
 
-Far-field quality, wake-word range and the right gain setting all still need a
-person talking to it, **in a quiet room**.
+Left deliberately untuned, because nothing yet says they need it:
+
+- **Capture gain** stays at max (0 dB). The earlier "peaks near −1 dBFS,
+  probably too hot" reading was measuring the music, not a noise floor, and
+  supports no conclusion. It works as shipped; leave it until something fails.
+- **`preroll_ms`** stays 250, and `vad_threshold` 0.5.
+
+Worth knowing about the diagnostics: **a fluent transcript is not evidence of a
+working microphone.** Whisper returned "I love you. I love you." for 7.7 s of
+music with nobody speaking. Confirm against *known* words, which is exactly
+what a real conversational turn does and a `--record` of an empty room does not.
+
+Still unmeasured: usable range and off-axis angle, behaviour with the extractor
+running, and per-turn latency with the array in the path — the numbers in the
+baseline table above are all close-talk. Metrics print per turn but are not
+persisted, so they scroll away with the terminal.
 
 Three diagnostics were added while chasing the missing device: `--levels`
 (per-channel dBFS meter), `--record N` (capture the exact device+channel the
