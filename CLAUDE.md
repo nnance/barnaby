@@ -8,9 +8,10 @@ project context automatically.
 ## What this is
 
 A companion robot for a kitchen counter, shared by a married couple. Answers
-questions, runs the house via Home Assistant, and reacts with a screen face and
-a moving head. Named Barnaby — three syllables, hard consonants, nothing on TV
-triggers it. The name is also the wake word.
+questions, runs the house (Control 4 today; Home Assistant intended as the hub
+later), and reacts with a screen face and a moving head. Named Barnaby — three
+syllables, hard consonants, nothing on TV triggers it. The name is also the
+wake word.
 
 **Form:** rounded creature, penguin/owl silhouette. ~200 mm tall, 190 mm body.
 Head is a sphere truncated by a plane — an 83 mm flat facet holding a 2.1″ round
@@ -23,15 +24,20 @@ translucent lower shell.
 
 | Machine | Runs | Our code? |
 |---|---|---|
-| **Mac Studio** M3 Ultra 96 GB | 3× `rapid-mlx serve` — Whisper, LLM, Kokoro | **No** |
+| **Mac Studio** M3 Ultra 96 GB | 3× `rapid-mlx serve` — Whisper, LLM, Kokoro. **Plus the Node agent server** (not built) | Yes, soon |
 | **Pi 5** (in Barnaby) | Orchestrator, face renderer | Python + TS |
-| **HA box** (not yet built) | Home Assistant, Music Assistant | No |
+| **Control 4** controller | The actual home automation, today | No |
+| **HA box** (not yet built) | Home Assistant as hub over Control 4, Music Assistant | No |
 | **ESP32-S3** (not yet built) | Servos, body glow, touch, IMU | C++ |
 
 ```
-mic → wake → VAD → ASR(Mac) → HA Assist ─┬─ matched → chirp
-                                          └─ no match → LLM(Mac) → TTS(Mac) → speaker
-                                                        streamed, sentence by sentence
+Today:
+mic → wake → VAD → ASR(Mac) → LLM(Mac) → TTS(Mac) → speaker
+                              streamed, sentence by sentence
+
+Intended — tier 0 becomes ours, in the Node server, over a Control 4 adapter:
+mic → wake → VAD → ASR → agent(Mac) ─┬─ intent match → device + chirp
+                                      └─ no match → LLM → tools → TTS → speaker
 ```
 
 Mac command lines — **`--host 0.0.0.0` and `--no-think` are both required:**
@@ -46,14 +52,27 @@ rapid-mlx serve kokoro                 --port 8002 --host 0.0.0.0
 
 ## Repos
 
-**`barnaby-orchestrator/`** — Python 3.11, runs on the Pi.
+Directories are `orchestrator/` and `face/`. Older docs call them
+`barnaby-orchestrator/` and `barnaby-face/` — those names do not exist, and the
+rsync line in `pi-setup-guide.md` used one.
+
+**`orchestrator/`** — Python 3.11, runs on the Pi. Deployed by
+`rsync -a orchestrator/ barnaby.local:~/barnaby/`.
 `pipeline.py` state machine · `clients.py` ASR/LLM/TTS/HA · `listen.py` wake +
 VAD · `audio.py` capture/playback · `face.py` WebSocket server · `metrics.py`
 per-turn latency · `config.yaml`
 
-**`barnaby-face/`** — TypeScript + Vite + Canvas 2D, 480×480.
+Diagnostics, in the order you want them: `--devices` · `--levels` (per-channel
+dBFS meter) · `--record N` (capture the exact device+channel to a wav) ·
+`--check` · `--say` · `--open-mic`.
+
+**`face/`** — TypeScript + Vite + Canvas 2D, 480×480.
 `expressions.ts` state table · `layout.ts` mm constants · `face.ts` renderer ·
-`scripts/check-fit.ts` **geometry regression — must pass before build**
+`src/check-fit.ts` **geometry regression, gates `pnpm build`**
+
+Runs on a laptop until the panel arrives: `pnpm dev`, then
+`http://localhost:5273/?ws=ws://barnaby.local:8711/face`. The `?ws=` override is
+required — the default derives the socket host from whoever served the page.
 
 **Design docs** — `parts-audit.md`, `pi-setup-guide.md`, `wiring-guide.md`,
 `robot-form-study.html` (interactive 3D form + expression study).
@@ -95,18 +114,55 @@ the full 15 s cap.
 "barnaby" model is still untrained.
 
 **Not working / not built:** custom wake word, follow-up turns without
-re-waking, Home Assistant (no instance, so tier 0 is off and everything hits
-the LLM), tool calling, camera and face tracking, identity, ESP32, CAD.
+re-waking, the Node agent server, any home automation at all (the `home_assistant`
+block in `config.yaml` points at an instance that does not exist, so tier 0 is
+dead and everything hits the LLM), tool calling, camera and face tracking,
+identity, ESP32, CAD.
 
 ---
 
 ## Decisions already made — do not relitigate
 
 - **Python only on the Pi**, forced solely by `picamera2` being Python-only.
-  The Mac runs no code of ours; everything is OpenAI-compatible HTTP.
-- **HA on its own box, never on the Mac.** Docker on macOS has no host
-  networking (breaks mDNS/SSDP discovery) and no USB passthrough (breaks the
-  Zigbee radio). Also: rebooting the Mac must not take the lights down.
+- **The agent loop lives on the Mac Studio, not the Pi** (decided 2026-08-22,
+  reversing "the Mac runs no code of ours"). A Node server on the Mac exposes
+  the same OpenAI-compatible `/v1/chat/completions` the Pi already calls —
+  passthrough to rapid-mlx at first, then the home of tool calling and the rest
+  of the agent logic. The Pi keeps everything real-time and hardware-adjacent:
+  capture, wake word, VAD, playback, face, barge-in.
+
+  The reason is **access, not latency** — a Pi→Mac hop is ~1 ms and irrelevant
+  next to a 680 ms TTFT, but the Pi cannot read the Mac's files or mail, and
+  tools must run where the data is. Secondary: agent loops are bad neighbours
+  for hard real-time audio, and it ends the rsync-to-Pi cycle for prompt edits.
+- **Centralise on the Mac Studio.** It is already always-on, already runs other
+  critical household workloads, and Barnaby is *already* fully dependent on it
+  — ASR is there, so a Mac outage takes voice down no matter how anything else
+  is arranged. Fewer boxes, less to debug. Tier routing moves off the Pi too.
+- **Home automation is Control 4 today, not Home Assistant.** HA appears all
+  over these docs as a stand-in and **is not what the house runs**. The
+  intention is to migrate to HA as the hub, orchestrating Control 4, but that
+  is future work with no date. Consequences that bite now:
+  - **There is no tier 0.** It was designed around HA Assist's local intent
+    matcher. Control 4 has no equivalent, so `~50 ms device commands` and
+    `targets.device_command_ms: 700` describe a system that does not exist.
+  - **Build our own intent matcher** in the Node server — keyword matching over
+    the device and room list pulled from the Control 4 controller, in front of
+    the LLM. `clients.py` says writing one "would be strictly worse"; that was
+    true only while HA was going to supply one free.
+  - **Integrate behind an adapter.** Define the tool in intent terms (on, off,
+    set level, room + device), with a Control 4 adapter now and an HA adapter
+    later. Then the migration is one adapter swap and the agent never learns
+    what Control 4 is. Practical path is the controller's local Director API,
+    as used by HA's own integration via `pyControl4` — which is Python, so a
+    Node server either reimplements it or runs a sidecar. Coverage is partial
+    and Snap One has broken it before; do not build deep against it.
+- **HA, when it arrives, goes on its own box, never on the Mac.** Docker on
+  macOS has no host networking (breaks mDNS/SSDP discovery) and no USB
+  passthrough (breaks the Zigbee radio). This is the one thing that cannot be
+  centralised, so the floor is two always-on boxes. The house's own schedules,
+  automations and physical switches must never route through the Mac or the Pi
+  — voice is a convenience layer over a hub that stands alone.
 - **Screen face, not a lens.** Personality comes from the display; head motion
   is for attention. A lens on a stalk reads as surveillance.
 - **Faults outrank moods.** The face is a pure view; the orchestrator owns all
@@ -135,6 +191,13 @@ the LLM), tool calling, camera and face tracking, identity, ESP32, CAD.
 | Barge-in | Only works with playback routed through the array — its AEC needs the reference. Currently `false` |
 | Speaker connector | Board is JST PH 2.0; speakers are XH 2.5. Pigtail needed. Board connector is **top-entry** — affects CAD clearance |
 | setuptools | Needs explicit `packages = ["barnaby"]`. Or skip packaging: `pip install -r requirements.txt` and `python -m barnaby` |
+| **Every 15 s turn has two opposite causes** | Endpointing needs `min_speech` *before* it can fire, so a dead input can never end a turn early — it runs to `max_utterance_ms` and transcribes to nothing, exactly like an input so hot that noise reads as continuous speech. Identical symptom, opposite fix. `--levels` tells them apart |
+| Wrong `input_device` fails silently | The Waveshare exposes 2 input channels, so pointing `input_device` at it *succeeds* and hands you a bare mic with no beamforming. Looks like "Whisper is bad." `--record N` then `aplay` is the check — `arecord -c 2` can't, it plays both channels |
+| openwakeword needs `download_models()` | Mandatory **even with a custom model** — the shared melspectrogram and embedding models are separate. Skip it and `Model(...)` fails as if your `.onnx` were corrupt. `listen.py` pins `inference_framework="onnx"`, so the ONNX variants specifically must be present |
+| `preroll_ms` reaches into the wake phrase | At 500 ms Whisper transcribes the wake word as part of the question ("Harvest, what's the weather"). Now 250. Retune per wake model — detection latency differs. Matters most for intent matching, which is brittle to a leading junk word |
+| Kokoro voice list | Undocumented: `curl http://<mac>:8002/v1/audio/voices` → 53 voices. `<lang><gender>_<name>`, a=American b=British, f/m. Currently `bm_fable` |
+| Pi needs manual start after reboot | No systemd unit. `cd ~/barnaby && source .venv/bin/activate && python -m barnaby`. `HA_TOKEN` is an `export` that does not survive, and unset silently disables tier 0 rather than erroring |
+| face `check-fit` was unrunnable | `package.json` pointed at `scripts/check-fit.ts`; the file is `src/check-fit.ts`. Fixed 2026-08-22 and wired into `build`, so the geometry regression actually gates it now |
 
 ---
 
@@ -188,15 +251,45 @@ MPR121 · IMU · HA box + ZBT-1
    proves the path — then test against the real kitchen, TV on, extractor
    running. Retune `preroll_ms` at the same time; too much of it and the wake
    phrase lands in the transcript.
-4. **Home Assistant.** Biggest felt improvement: device commands drop from
-   ~1.5 s to ~50 ms. Name areas the way you actually speak.
-5. **Tool calling.** Tier 1 answers but cannot act. Benchmark reliability on the
-   local model — small models are weak at multi-step tool use.
-6. **Attack the 680 ms TTFT.** Confirm `--no-think`. Consider 8-bit for better
+4. **The Node agent server on the Mac.** Stand it up as a pure passthrough
+   first, on its own port, so the Pi change is one line — point `llm_url` at it
+   and leave ASR and TTS talking to rapid-mlx directly, off the critical path.
+   Get that boring before adding anything.
+   - **Streaming is the thing that will silently break.** Sentence-pipelined
+     TTS depends on token-level SSE — `delta.content` chunks then `[DONE]`. Any
+     buffering middleware (compression especially) turns time-to-first-audio
+     into full-response latency and nothing looks broken. Forward
+     `chat_template_kwargs.enable_thinking` too or `--no-think` is lost.
+   - **Keep it stateless first.** The Pi keeps sending the message array; add a
+     session id later. A stateless endpoint can be debugged with `curl`.
+   - **Keep a direct-to-rapid-mlx fallback** — not for reliability (if the Mac
+     is up, both are up) but because you will restart the agent server
+     constantly while developing and "Barnaby went mute" gets old.
+   - It is also the natural place to route per-turn between the local model and
+     a frontier one, which may be what makes tool calling work at all. Privacy
+     cost, chosen deliberately.
+5. **Tool calling.** Tier 1 answers but cannot act. Two things to plan for:
+   - **It breaks the 2 s budget inherently.** A tool turn is two inference
+     rounds before the first speakable token — ~1.4 s before the tool even
+     runs. Decide what he does in the gap; the face already goes `curious`, but
+     a spoken acknowledgement may be wanted. The latency table needs new stage
+     marks per tool round or it will report nonsense.
+   - **The mic is now an attack surface.** Today a wake-word false positive
+     costs a wasted LLM call; once tools read mail and files, anything the
+     television says can reach real data, and mail flowing into the model is
+     prompt injection aimed at your tools. Read-only tools first, an explicit
+     allowlist rather than an open plugin surface, confirmation for side
+     effects. Benchmark reliability too — small models are weak at multi-step
+     tool use.
+6. **A systemd unit for the Pi.** Nothing starts on boot today; it is
+   `cd ~/barnaby && source .venv/bin/activate && python -m barnaby` by hand
+   every time. Put the token in an `EnvironmentFile` rather than a shell
+   `export` that does not survive.
+7. **Attack the 680 ms TTFT.** Confirm `--no-think`. Consider 8-bit for better
    tool-call reliability; there's headroom.
-7. **Camera + face tracking** when the Wide arrives — emits `look` on the face
+8. **Camera + face tracking** when the Wide arrives — emits `look` on the face
    channel, which the renderer already consumes.
-8. **ESP32 firmware.**
+9. **ESP32 firmware.**
 
 **Deferred to a later conversation: all CAD.** The parametric model in
 build123d is blocked on measuring the HDMI control board, its FPC length, and

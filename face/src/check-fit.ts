@@ -11,8 +11,8 @@
 import {
   ACTIVE_RADIUS_MM, EYES, STATES,
   type EyeGeom, type FaceState, type StateName,
-} from './expressions';
-import { LAYOUT } from './layout';
+} from './expressions.ts';
+import { LAYOUT } from './layout.ts';
 
 const { eyeX, browW, browH, maxDX, maxDY } = LAYOUT;
 

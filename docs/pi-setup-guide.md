@@ -61,7 +61,7 @@ source ~/.bashrc
 Copy the orchestrator over from your laptop:
 
 ```bash
-rsync -a barnaby-orchestrator/ barnaby.local:~/barnaby/
+rsync -a orchestrator/ barnaby.local:~/barnaby/
 ```
 
 Then on the Pi:
