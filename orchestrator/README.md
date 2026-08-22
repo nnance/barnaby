@@ -79,6 +79,25 @@ python -m barnaby
 Point the face at it: `pnpm dev` in `face/`, then
 `http://localhost:5273/?ws=ws://barnaby.local:8711/face`.
 
+### Rebuilding the venv
+
+```bash
+cd ~/barnaby
+deactivate 2>/dev/null; rm -rf .venv
+uv venv --python 3.11          # not `python -m venv` — see below
+source .venv/bin/activate
+python -V                      # confirm 3.11.x before going further
+uv pip install -e '.[wake]'
+python -c "import openwakeword.utils as u; u.download_models()"
+```
+
+**`--python 3.11` is load-bearing.** Pi OS ships 3.13 and there are no cp313
+wheels for `tflite-runtime`, so a plain `python -m venv` fails the `[wake]`
+extra with `No solution found when resolving dependencies`. uv downloads a
+standalone 3.11 for you.
+
+**That last line is mandatory, not optional.** See below.
+
 ## Talking to it before the wake word exists
 
 `models/barnaby.onnx` does not exist yet — it has to be trained. Until then
@@ -137,6 +156,29 @@ commands feel slow. The startup log warns about this.
 
 **Faults outrank moods.** The face's `set_fault` overrides `set_mood`; a fault
 indicator a good mood can mask is useless.
+
+**`rm -rf .venv` deletes the wake-word models.** openWakeWord's models live
+inside site-packages, and reinstalling the package does *not* fetch them back
+— `download_models()` is a separate step you have to re-run after every venv
+rebuild. Skip it and loading fails in a way that reads like a corrupt `.onnx`
+rather than a missing download. It is also required when you eventually train
+your own `barnaby.onnx`: the shared melspectrogram and embedding models are
+what's missing, not the wake model, and `listen.py` pins
+`inference_framework="onnx"` so the ONNX variants specifically must be there.
+
+**The VAD model does survive a venv rebuild.** It is cached outside the venv at
+`~/.cache/barnaby/silero_vad.onnx` and refetched automatically if missing, so
+there is nothing to do for it either way.
+
+**Nothing survives a reboot.** There is no systemd unit yet, so coming back up
+is manual every time:
+
+```bash
+cd ~/barnaby && source .venv/bin/activate && python -m barnaby
+```
+
+Any token you `export` is gone too. Writing the unit — with the token in an
+`EnvironmentFile` rather than a shell export — is on the backlog.
 
 ## Not yet wired
 

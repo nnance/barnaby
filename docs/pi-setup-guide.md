@@ -88,6 +88,10 @@ uv pip install -e '.[wake]'
 
 Not needed to start. `--open-mic` and `--say` are fine on 3.13.
 
+This guide covers the blank-card path only. For rebuilding the venv later, and
+for what does and does not survive a rebuild or a reboot, see
+`orchestrator/README.md`.
+
 ---
 
 ## 4. Playback first
