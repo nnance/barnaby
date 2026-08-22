@@ -101,14 +101,38 @@ TIME TO FIRST AUDIO           1488 ms   budget 2000  OK
 
 Mac shows low GPU and near-zero CPU at this load — lots of headroom.
 
-**Audio, as of 2026-08-22.** The ReSpeaker XVF3800 **does not enumerate** — it
-never appears in `lsusb`, `arecord -l` or `--devices`. Possibly the I2S
-firmware variant. Until it does, input is an analog mic on the Waveshare card
-(`"USB PnP"`, card 0, ch0), which means no beamforming, no AEC, no far-field.
-Three diagnostics were added while chasing this: `--levels` (per-channel dBFS
-meter), `--record N` (capture the exact device+channel the pipeline reads, to a
-wav), and a no-speech guard that bails a turn after 3 s instead of stalling for
-the full 15 s cap.
+**Audio, as of 2026-08-22.** The ReSpeaker XVF3800 **now enumerates** —
+`2886:001a`, ALSA card 3, after a long spell of not appearing in `lsusb`,
+`arecord -l` or `--devices` at all. Nothing was changed to fix it, so the cause
+is unknown and it may well come back; if it does, check the cable and port
+before assuming the I2S-firmware theory. `input_device` is now `"reSpeaker"`,
+which restores beamforming and far-field. Output is still the Waveshare card,
+so AEC has no reference and `barge_in_enabled` stays `false`.
+
+Two corrections to what was assumed while it was missing:
+
+- **It is a 2-channel device, not a multi-channel one.** The USB descriptor
+  advertises one 2-channel 16 kHz S16_LE capture interface (chmap FL,FR); the
+  XMOS DSP beamforms on-board and exposes no raw per-capsule feeds. So the
+  "pick ch0 or you get a bare capsule" trap does not exist on this firmware.
+  Measured on room ambience the channels are distinct but correlated (r = 0.89)
+  with ch0 ~7 dB hotter. Use ch0.
+- **Capture gain sits at max** (`Headset Capture Volume` 60/60 = 0 dB), which
+  puts quiet room ambience at −26 dBFS RMS and peaks near −1 dBFS. That is hot
+  enough to be worth turning down once there is speech to tune against.
+
+**Not yet validated against speech.** Everything above is descriptor
+inspection plus ambient-noise measurement. Capture through the pipeline's own
+`Microphone` path works and Whisper returns 200s, but every test recording so
+far caught an empty room, and Whisper duly hallucinated ("I love you.") — its
+standard behaviour on silence, and a good reminder that a plausible transcript
+is not evidence of a working mic. Far-field quality, wake-word range and the
+right gain setting all still need a person talking to it.
+
+Three diagnostics were added while chasing the missing device: `--levels`
+(per-channel dBFS meter), `--record N` (capture the exact device+channel the
+pipeline reads, to a wav), and a no-speech guard that bails a turn after 3 s
+instead of stalling for the full 15 s cap.
 
 **Wake word:** validated with openWakeWord's pretrained `hey_jarvis`. A custom
 "barnaby" model is still untrained.
@@ -186,7 +210,8 @@ identity, ESP32, CAD.
 | `rapid-mlx` binds `127.0.0.1` | Needs `--host 0.0.0.0`. Also check macOS → Privacy & Security → **Local Network** |
 | openwakeword | Hard-depends on `tflite-runtime`, no cp313 wheels. Optional `[wake]` extra, needs Python 3.11/3.12 |
 | `silero-vad` package | Declares torch. We fetch the `.onnx` directly instead |
-| XVF3800 | Multi-channel. **ch0 = beamformed + AEC**, rest are raw capsules. Wrong channel looks like "barge-in is broken" |
+| XVF3800 | **2 channels, not many** — the DSP beamforms on-board and exposes no raw capsules over USB. Use ch0 (~7 dB hotter than ch1). Descriptor is the authority here; the usual XMOS "ch0 beamformed, rest raw" lore does not match this firmware |
+| XVF3800 went missing, then came back | It failed to enumerate at all for a long stretch, then appeared on 2026-08-22 with no change made. Cause unknown, so treat a disappearance as cable/port first, not firmware |
 | `playback_rate` | 24000 on the USB card, **16000** on the array. Mismatch = wrong pitch and speed |
 | Barge-in | Only works with playback routed through the array — its AEC needs the reference. Currently `false` |
 | Speaker connector | Board is JST PH 2.0; speakers are XH 2.5. Pigtail needed. Board connector is **top-entry** — affects CAD clearance |

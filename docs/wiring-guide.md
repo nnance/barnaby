@@ -117,18 +117,26 @@ wrong pitch and speed, which is a confusing thing to debug.
 
 ## The channel gotcha
 
-**The array does not present a mono stream.** Like most XMOS arrays it exposes
-several channels — typically:
+**The array does not present a mono stream** — but on the firmware here it
+presents only two channels, not the six-or-so the usual XMOS write-ups
+describe. Measured 2026-08-22 from the USB descriptor and `/proc/asound`:
 
 | Channel | Contents |
 |---|---|
-| 0 | Beamformed, echo-cancelled, noise-suppressed — **use this one** |
-| 1..n | Raw per-capsule feeds |
-| last | Playback loopback reference (on some firmware) |
+| 0 | Processed output, beamformed on-board — **use this one**, ~7 dB hotter |
+| 1 | Second processed channel; distinct from ch0 but highly correlated (r = 0.89) |
 
-Open it as mono and you either get an error or, worse, one raw capsule with no
-AEC — which presents as "barge-in doesn't work" and sends you debugging the
-wrong thing entirely.
+There are **no raw per-capsule feeds and no loopback reference channel** here,
+so the classic trap — picking a bare capsule by mistake and then debugging
+"barge-in doesn't work" — cannot happen on this firmware. Check the descriptor
+before trusting any channel table, this one included:
+
+```bash
+cat /proc/asound/card<N>/stream0     # channels, rates, chmap
+```
+
+Note that with no loopback reference channel, AEC needs playback routed through
+the array itself to have any reference at all.
 
 The orchestrator opens the device at its native channel count and takes one:
 

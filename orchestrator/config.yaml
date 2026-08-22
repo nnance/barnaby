@@ -1,16 +1,23 @@
 # Barnaby orchestrator. Runs on the Pi.
 
 audio:
-  # `python -m barnaby --devices` to find these. Match the ReSpeaker XVF3800.
-  # TEMPORARY — Waveshare USB sound card for output, until the JST pigtail
-  # arrives and the speaker can hang off the array itself.
-  #   input_device:  the ReSpeaker XVF3800
-  #   output_device: the Waveshare card
-  # Find both with `python -m barnaby --devices`.
-  input_device: "USB PnP"
+  # `python -m barnaby --devices` to find these.
+  # Input is the ReSpeaker XVF3800, which finally enumerated on 2026-08-22
+  # (2886:001a, ALSA card 3) after a long spell of not appearing at all.
+  # Output is still TEMPORARY — the Waveshare USB sound card, until the JST
+  # PH 2.0 pigtail arrives and the speaker can hang off the array itself.
+  # Because playback does not go through the array, its AEC has no reference
+  # signal, so barge_in_enabled stays false below.
+  input_device: "reSpeaker"
   output_device: "USB PnP"
-  input_channels: null   # null = device native. XVF3800 exposes several.
-  input_channel: 0       # ch0 = beamformed + echo-cancelled. Raw mics are 1..n.
+  input_channels: null   # null = device native. This firmware reports 2.
+  # This XVF3800 does NOT expose raw capsules. Its USB descriptor advertises a
+  # single 2-channel, 16 kHz S16_LE capture interface (chmap FL,FR) — the XMOS
+  # DSP beamforms on-board and returns processed stereo. Measured on ambient
+  # room noise the two channels are distinct but highly correlated (r = 0.89),
+  # with ch0 ~7 dB hotter than ch1. ch0 is the one to use; there is no separate
+  # "raw mic" channel to pick by mistake here.
+  input_channel: 0
   # Audio from *before* the trigger, prepended so the first word isn't clipped.
   # It reaches back into the wake phrase too, so too much of it and Whisper
   # transcribes the wake word as part of the question ("Harvest, what's the

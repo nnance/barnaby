@@ -132,14 +132,17 @@ a dead board.
 Record and play it back — this is why playback came first:
 
 ```bash
-arecord -D plughw:2,0 -f S16_LE -r 16000 -c 6 -d 5 /tmp/t.wav
-aplay -D plughw:1,0 /tmp/t.wav
+arecord -D plughw:3,0 -f S16_LE -r 16000 -c 2 -d 5 /tmp/t.wav
+aplay -D plughw:0,0 /tmp/t.wav
 ```
 
-**Note `-c 6`.** The array is not mono. Like most XMOS arrays it exposes several
-channels — channel 0 is the beamformed, echo-cancelled output and the rest are
-raw capsules. If `-c 6` errors, try `-c 2` or `-c 4`; the error message names the
-supported count.
+**Note `-c 2`, and check your card numbers.** The array is not mono, but on the
+firmware here it is not six-channel either: it advertises exactly 2 capture
+channels at 16 kHz (chmap FL,FR), beamformed on-board, with no raw per-capsule
+feeds over USB. Use ch0. Confirm the real numbers before copying the lines
+above — `cat /proc/asound/cards` for the card index and
+`cat /proc/asound/card<N>/stream0` for the channel count and rates it actually
+supports, rather than guessing at `-c 6`.
 
 ## 6. Tell Barnaby which devices to use
 

@@ -1,8 +1,20 @@
 ## Next, in order
 
-1. **Get the ReSpeaker enumerating.** Everything about far-field, AEC and
-   barge-in is blocked on it, and tuning done against a close-talk mic will not
-   transfer.
+1. **ReSpeaker — enumerating, now validate it against a human.** It came back
+   on 2026-08-22 with nothing changed (`2886:001a`, card 3), and `config.yaml`
+   now points `input_device` at it. Capture works through the pipeline's own
+   path; the descriptor says 2 channels, beamformed on-board, no raw capsules.
+
+   What is **not** done, because it needs someone talking to it:
+   - **Far-field transcription.** Every test so far recorded an empty room, and
+     Whisper hallucinated confidently into the silence. Speak at counter
+     distance, off-axis, and confirm the transcript.
+   - **Gain.** Capture is at max (0 dB) and ambience alone peaks near −1 dBFS.
+     Almost certainly wants turning down; `--levels` while speaking is the
+     check, then `amixer -c 3 sset Headset,0 Capture <n>`.
+   - **Wake-word range** at the same distances, now that beamforming is back.
+   - **Barge-in stays off** until the JST pigtail moves playback to the array —
+     AEC has no reference signal until then, so this cannot be tested yet.
 2. **Active session — the wake word should open a conversation, not a turn.**
    Say "Barnaby, what's the weather", then just say "what about tomorrow"
    without waking him again. Today every single turn needs the wake word, which

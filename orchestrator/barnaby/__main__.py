@@ -54,10 +54,12 @@ async def check(cfg: Config) -> int:
 def levels(cfg: Config) -> int:
     """Live per-channel input meter.
 
-    Two jobs. Before the array arrives it answers "is anything reaching the mic
-    at all", which silence and a misconfigured device look identical without.
-    After it arrives it tells you which channel is the beamformed one — speak
-    off-axis and ch0 should stay steadier than the raw capsules.
+    Two jobs. It answers "is anything reaching the mic at all", which silence
+    and a misconfigured device look identical without. It is also how you set
+    capture gain: the array ships at max (0 dB), hot enough that room ambience
+    alone peaks near −1 dBFS, so watch the bars while speaking at counter
+    distance and back it off with `amixer -c <N> sset Headset,0 Capture <n>`
+    until speech peaks leave headroom.
 
     Opens at the same rate and frame size the pipeline uses, so a device that
     fails here fails there too.

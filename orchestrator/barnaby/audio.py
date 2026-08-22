@@ -34,11 +34,11 @@ class Microphone:
     def __init__(self, device: str | int | None, preroll_ms: int = 500,
                  channels: int | None = None, channel: int = 0):
         self.device = device
-        # The XVF3800 does NOT present a mono stream. Like most XMOS arrays it
-        # exposes several channels — typically ch0 = the beamformed, echo-
-        # cancelled output and the rest raw per-mic feeds. Opening it as mono
-        # either fails or silently hands you one raw capsule with no AEC, which
-        # looks like "barge-in doesn't work". Open native, take one channel.
+        # The XVF3800 does not present a mono stream, so open it native and take
+        # one channel. Note the count is smaller than the usual XMOS story
+        # suggests: this firmware advertises exactly 2 capture channels at
+        # 16 kHz (chmap FL,FR), beamformed on-board, with no raw per-capsule
+        # feeds exposed over USB. ch0 is the one we want.
         self.channels = channels
         self.channel = channel
         self.queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=64)
