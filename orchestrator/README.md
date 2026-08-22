@@ -76,7 +76,7 @@ python -m barnaby --check      # confirm all four services are reachable
 python -m barnaby
 ```
 
-Point the face at it: `npm run dev` in `barnaby-face`, then
+Point the face at it: `pnpm dev` in `face/`, then
 `http://localhost:5273/?ws=ws://barnaby.local:8711/face`.
 
 ## Talking to it before the wake word exists

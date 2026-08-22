@@ -8,6 +8,7 @@
     ],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -23,7 +24,6 @@
     ]
   },
   "include": [
-    "src",
-    "scripts"
+    "src"
   ]
 }

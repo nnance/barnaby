@@ -5,12 +5,13 @@
   "main": "index.js",
   "scripts": {
     "dev": "vite --host",
-    "build": "tsc --noEmit && vite build",
+    "build": "node src/check-fit.ts && tsc --noEmit && vite build",
+    "check:fit": "node src/check-fit.ts",
     "preview": "vite preview --host",
     "lint": "biome lint",
     "lint:fix": "biome lint --fix",
     "format": "biome format",
-    "test": "node scripts/check-fit.ts"
+    "test": "node src/check-fit.ts"
   },
   "keywords": [],
   "author": "",
