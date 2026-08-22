@@ -28,7 +28,7 @@ import io
 import logging
 import re
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 import httpx
 import numpy as np
@@ -126,6 +126,7 @@ class LLM:
 
     async def stream_sentences(
         self, messages: list[dict], first_flush_chars: int = 24,
+        on_first_token: Callable[[], None] | None = None,
     ) -> AsyncIterator[tuple[str, bool]]:
         """Yields (sentence, is_first). The first chunk is flushed at the
         earliest clause boundary past `first_flush_chars` so audio starts
@@ -157,6 +158,9 @@ class LLM:
                 piece = delta.get("content") or ""
                 if not piece:
                     continue
+                if on_first_token is not None:
+                    on_first_token()          # Turn.mark is idempotent
+                    on_first_token = None
                 buf += piece
 
                 while True:
@@ -193,10 +197,20 @@ class TTS:
         self.rate = rate
         self._http = httpx.AsyncClient(timeout=timeout)
 
-    async def synth(self, text: str) -> np.ndarray:
+    async def synth(self, text: str, retries: int = 3) -> np.ndarray:
+        """One sentence to audio.
+
+        Retries on 503/429: a single-model server rejects overlapping requests
+        and also 503s while it is still loading weights on the first call.
+        """
         payload = {"model": self.model, "voice": self.voice, "input": text,
                    "response_format": "wav"}
-        r = await self._http.post(self.url, json=payload)
+        for attempt in range(retries):
+            r = await self._http.post(self.url, json=payload)
+            if r.status_code in (429, 503) and attempt < retries - 1:
+                await asyncio.sleep(0.3 * (attempt + 1))
+                continue
+            break
         r.raise_for_status()
         audio, sr = sf.read(io.BytesIO(r.content), dtype="float32")
         if audio.ndim > 1:

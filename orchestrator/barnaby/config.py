@@ -25,12 +25,15 @@ def _expand(value):
 class AudioCfg:
     input_device: str | int | None = None
     output_device: str | int | None = None
+    input_channels: int | None = None   # None = use the device's native count
+    input_channel: int = 0              # XVF3800: ch0 is the processed output
     preroll_ms: int = 500
     hangover_ms: int = 350          # lower = snappier, higher = fewer cut-offs
     min_speech_ms: int = 250
     max_utterance_ms: int = 15_000
     barge_in_ms: int = 200
-    playback_rate: int = 24_000
+    barge_in_enabled: bool = True   # needs playback routed through the array
+    playback_rate: int = 24_000   # 16000 when playing through the XVF3800
 
 
 @dataclass

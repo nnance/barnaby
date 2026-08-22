@@ -1,0 +1,13 @@
+# The no-packaging path: install these, then run `python -m barnaby` from the
+# project directory. No build step, no editable install, no setuptools.
+numpy>=1.26
+sounddevice>=0.4.6
+soundfile>=0.12
+httpx>=0.27
+websockets>=12.0
+pyyaml>=6.0
+onnxruntime>=1.17
+
+# Wake word only. Needs Python 3.11 or 3.12 — no cp313 wheels for tflite.
+# Not required for --open-mic or --say.
+openwakeword>=0.6
