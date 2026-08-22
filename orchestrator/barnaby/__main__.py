@@ -95,7 +95,8 @@ async def main_async(args: argparse.Namespace) -> int:
         await face.set_mood("neutral")
         return 0
 
-    mic = Microphone(cfg.audio.input_device, cfg.audio.preroll_ms)
+    mic = Microphone(cfg.audio.input_device, cfg.audio.preroll_ms,
+                 cfg.audio.input_channels, cfg.audio.input_channel)
     ep = Endpointer(cfg.audio.hangover_ms, cfg.audio.min_speech_ms,
                     cfg.audio.max_utterance_ms)
 

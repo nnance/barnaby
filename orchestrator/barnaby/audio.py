@@ -31,8 +31,16 @@ class Microphone:
     """Continuous capture. Frames go to an asyncio queue; a ring buffer keeps
     the last few hundred ms so we can prepend pre-roll on wake."""
 
-    def __init__(self, device: str | int | None, preroll_ms: int = 500):
+    def __init__(self, device: str | int | None, preroll_ms: int = 500,
+                 channels: int | None = None, channel: int = 0):
         self.device = device
+        # The XVF3800 does NOT present a mono stream. Like most XMOS arrays it
+        # exposes several channels — typically ch0 = the beamformed, echo-
+        # cancelled output and the rest raw per-mic feeds. Opening it as mono
+        # either fails or silently hands you one raw capsule with no AEC, which
+        # looks like "barge-in doesn't work". Open native, take one channel.
+        self.channels = channels
+        self.channel = channel
         self.queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=64)
         self.ring: collections.deque[np.ndarray] = collections.deque(
             maxlen=max(1, preroll_ms * SAMPLE_RATE // 1000 // FRAME)
@@ -43,7 +51,7 @@ class Microphone:
     def _callback(self, indata, _frames, _time, status) -> None:
         if status:
             log.debug("input status: %s", status)
-        frame = indata[:, 0].copy()
+        frame = indata[:, self.channel].copy()
         self.ring.append(frame)
         if self._loop is not None:
             try:
@@ -53,12 +61,22 @@ class Microphone:
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
+        if self.channels is None:
+            info = sd.query_devices(self.device, "input")
+            self.channels = int(info["max_input_channels"])
+        if self.channel >= self.channels:
+            raise ValueError(
+                f"channel {self.channel} requested but device has "
+                f"{self.channels}. Set audio.input_channel in config.yaml."
+            )
         self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE, blocksize=FRAME, channels=1,
+            samplerate=SAMPLE_RATE, blocksize=FRAME, channels=self.channels,
             dtype="float32", device=self.device, callback=self._callback,
         )
         self._stream.start()
-        log.info("microphone open (device=%s)", self.device or "default")
+        log.info("microphone open (device=%s, %d channel(s), using ch%d)",
+                 self.device if self.device is not None else "default",
+                 self.channels, self.channel)
 
     def preroll(self) -> np.ndarray:
         return np.concatenate(list(self.ring)) if self.ring else np.zeros(0, "float32")

@@ -66,6 +66,11 @@ class Pipeline:
             frame = await self.mic.queue.get()
 
             if self.speaker.is_playing:
+                # Barge-in only works when playback goes through the array, so
+                # its echo canceller has a reference to subtract. On a separate
+                # output device he will hear himself and cut himself off.
+                if not self.cfg.audio.barge_in_enabled:
+                    continue
                 if self.barge.feed(frame):
                     log.info("barge-in")
                     self.speaker.interrupt()
@@ -168,6 +173,12 @@ class Pipeline:
         return True
 
     async def _answer(self, text: str, turn: Turn) -> None:
+        """Stream the LLM, fire TTS per sentence, play in order.
+
+        TTS requests overlap deliberately — the server handles concurrency, so
+        sentence three is synthesised while sentence one is still playing. The
+        speaker queue keeps playback ordered regardless of completion order.
+        """
         turn.tier = "tier1"
         messages = [{"role": "system", "content": SYSTEM},
                     *self.history[-6:],
@@ -178,19 +189,16 @@ class Pipeline:
         turn.mark("llm_sent")
 
         try:
-            async for sentence, is_first in self.llm.stream_sentences(messages):
+            async for sentence, is_first in self.llm.stream_sentences(
+                    messages, on_first_token=lambda: turn.mark("first_token")):
                 if is_first:
-                    turn.mark("first_token")
                     turn.mark("first_sentence")
                 reply.append(sentence)
-                # Fire TTS immediately; do not await it. Sentence n+1 is
-                # generated while sentence n is being synthesised and played.
                 pending.append(asyncio.create_task(self.tts.synth(sentence)))
                 await self._drain(pending, turn)
-        except Exception:                         # noqa: BLE001
+        except Exception:                          # noqa: BLE001
             log.exception("LLM failed")
             await self.face.set_fault("offline")
-            return
 
         while pending:
             await self._drain(pending, turn, wait=True)
@@ -198,13 +206,18 @@ class Pipeline:
         turn.mark("tts_done")
 
         turn.reply = " ".join(reply)
-        self.history += [{"role": "user", "content": text},
-                         {"role": "assistant", "content": turn.reply}]
+        if turn.reply:
+            self.history += [{"role": "user", "content": text},
+                             {"role": "assistant", "content": turn.reply}]
 
     async def _drain(self, pending: list, turn: Turn, wait: bool = False) -> None:
-        """Push finished TTS clips to the speaker, in order."""
+        """Push finished clips to the speaker, in sentence order."""
         while pending and (wait or pending[0].done()):
-            clip = await pending.pop(0)
+            try:
+                clip = await pending.pop(0)
+            except Exception:                      # noqa: BLE001
+                log.exception("TTS failed — skipping a sentence")
+                continue
             if not self.speaker.is_playing:
                 turn.mark("speaking")
                 await self.face.set_mood("happy")

@@ -1,7 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "barnaby-orchestrator"
 version = "0.1.0"
 requires-python = ">=3.11"
+# Core install works on any Python 3.11+ and pulls no ML framework. The VAD
+# model is a ~2 MB .onnx fetched on first run; onnxruntime executes it directly.
 dependencies = [
   "numpy>=1.26",
   "sounddevice>=0.4.6",
@@ -9,10 +15,20 @@ dependencies = [
   "httpx>=0.27",
   "websockets>=12.0",
   "pyyaml>=6.0",
-  "openwakeword>=0.6",
-  "silero-vad>=5.1",
   "onnxruntime>=1.17",
 ]
+
+[project.optional-dependencies]
+# openwakeword hard-depends on tflite-runtime, which has no wheels past
+# CPython 3.12 — even though we run its ONNX backend. Install this extra in a
+# 3.11 or 3.12 venv:  uv venv --python 3.11 && uv pip install -e '.[wake]'
+# Not needed for --open-mic or --say.
+wake = ["openwakeword>=0.6"]
+
+[tool.setuptools]
+# Explicit. Without this, setuptools auto-discovery guesses at the layout and
+# fails with "Multiple top-level modules discovered in a flat-layout".
+packages = ["barnaby"]
 
 [project.scripts]
 barnaby = "barnaby.__main__:main"

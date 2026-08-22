@@ -2,12 +2,28 @@
 
 audio:
   # `python -m barnaby --devices` to find these. Match the ReSpeaker XVF3800.
-  input_device: null
-  output_device: null
+  # TEMPORARY — Waveshare USB sound card for output, until the JST pigtail
+  # arrives and the speaker can hang off the array itself.
+  #   input_device:  the ReSpeaker XVF3800
+  #   output_device: the Waveshare card
+  # Find both with `python -m barnaby --devices`.
+  input_device: "USB PnP"
+  output_device: "USB PnP"
+  input_channels: null   # null = device native. XVF3800 exposes several.
+  input_channel: 0       # ch0 = beamformed + echo-cancelled. Raw mics are 1..n.
   preroll_ms: 500        # prepended on wake so the first word isn't clipped
   hangover_ms: 350       # silence before we call it done — the latency knob
   min_speech_ms: 250
-  barge_in_ms: 200       # only trustworthy because the array does hardware AEC
+  barge_in_ms: 200
+  # OFF while output goes through a separate device. The array's AEC has no
+  # reference for audio it didn't play, so Barnaby hears himself and cuts
+  # himself off mid-sentence. Turn back on when the speaker moves to the array.
+  barge_in_enabled: false
+  # Kokoro renders at 24 kHz and the TTS client resamples to whatever this is.
+  # Waveshare USB card: 24000 (no resample). If sounddevice rejects it, 48000.
+  # When the speaker moves to the array, drop this to 16000 — the XVF3800 caps
+  # there, and a mismatch plays everything at the wrong pitch and speed.
+  playback_rate: 24000
 
 wake:
   model: models/barnaby.onnx
@@ -18,11 +34,11 @@ mac:
   #   rapid-mlx serve whisper-large-v3-turbo --port 8000
   #   rapid-mlx serve qwen3.8-27b-4bit       --port 8001
   #   rapid-mlx serve kokoro                 --port 8002
-  asr_url: http://mac.local:8000/v1
+  asr_url: http://nicks-mac-studio.local:8000/v1
   asr_model: whisper-large-v3-turbo
-  llm_url: http://mac.local:8001/v1
+  llm_url: http://nicks-mac-studio.local:8001/v1
   llm_model: qwen3.8-27b-4bit
-  tts_url: http://mac.local:8002/v1
+  tts_url: http://nicks-mac-studio.local:8002/v1
   tts_model: kokoro
   tts_voice: af_heart
   max_tokens: 400
