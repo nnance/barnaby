@@ -48,6 +48,16 @@
    channel, which the renderer already consumes.
 7. **ESP32 firmware.**
 
+**Two small things needing a password, so left for Nick.**
+
+- **Make the journal persist.** `/var/log/journal` does not exist, so
+  `Storage=auto` keeps logs in `/run` and a reboot loses them. Today's VAD bug
+  was found by reading the journal; losing it on reboot is worse than it
+  sounds. `sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create
+  --prefix /var/log/journal`
+- **`HA_TOKEN` in `~/barnaby/barnaby.env`** whenever HA exists. The unit
+  already reads it via `EnvironmentFile`; unset, it silently disables tier 0.
+
 **Working, but only tested in a quiet room — the active session.** A wake word
 opens a conversation and a follow-up needs no second wake word (confirmed
 2026-08-22, including a pronoun resolved against history). Two things to watch

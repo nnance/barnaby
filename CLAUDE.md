@@ -68,6 +68,13 @@ Diagnostics, in the order you want them: `--devices` · `--levels` (per-channel
 dBFS meter) · `--record N` (capture the exact device+channel to a wav) ·
 `--check` · `--say` · `--open-mic` · `--latency` (recorded turn latencies).
 
+**`--check` now proves the VAD detects speech**, synthesising a Kokoro clip and
+running it through the endpointer — no microphone, room or person involved. It
+prints `VAD ok window 576, 70% of speech frames detected`, or `DOWN ... 0%`.
+Run it first when anything voice-related misbehaves: a dead VAD disables
+endpointing and the follow-up window while Whisper keeps transcribing fine, so
+every other symptom points at the microphone instead.
+
 **`face/`** — TypeScript + Vite + Canvas 2D, 480×480.
 `expressions.ts` state table · `layout.ts` mm constants · `face.ts` renderer ·
 `src/check-fit.ts` **geometry regression, gates `pnpm build`**
@@ -294,11 +301,43 @@ identity, ESP32, CAD.
 | "no speech detected in 3.0s" on a turn that transcribed perfectly | Not a microphone problem. It means the VAD returned False for every frame while Whisper heard you fine — i.e. the VAD is broken, not the input. This sat in the log for hours reading as a level problem |
 | `preroll_ms` reaches into the wake phrase | At 500 ms Whisper transcribes the wake word as part of the question ("Harvest, what's the weather"). Now 250. Retune per wake model — detection latency differs. Matters most for intent matching, which is brittle to a leading junk word |
 | Kokoro voice list | Undocumented: `curl http://<mac>:8002/v1/audio/voices` → 53 voices. `<lang><gender>_<name>`, a=American b=British, f/m. Currently `bm_fable` |
+| Diagnosing "he can't hear me" | `python -m barnaby --check` first — it now includes a VAD speech test. A VAD returning zero looks exactly like a dead mic but is not, and the mic is the more tempting thing to blame. Only after that: `--levels`, then `--record N` |
+| A quiet-room level reading proves nothing | Ambient noise reads ~-45 dBFS on *every* device, working or not, and Whisper hallucinates fluent sentences into near-silence ("I love you", "We'll be right back"). Both were mistaken for hardware faults this session. Play a known tone and capture it, or speak known words |
 | Reading the service log | `journalctl --user-unit barnaby -f`. **Not** `--user -u barnaby`, which looks in the user's own journal, finds nothing, and prints "No journal files were found" as if the service had never run. The unit's stdout goes to the *system* journal; `admin` reads it via the `adm` group |
 | The journal is volatile | `/var/log/journal` does not exist, so `Storage=auto` keeps everything in `/run` and a reboot loses it. `sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal` fixes it, and needs a password |
 | Deploying to the Pi | `./deploy.sh` — rsyncs and restarts the service. It is a **user** unit, so `systemctl --user`, never sudo (`admin` needs a password for sudo, which is why it is not a system unit). `journalctl --user-unit barnaby -f` for the log |
 | `HA_TOKEN` | Put it in `~/barnaby/barnaby.env`, read by the unit's `EnvironmentFile`. A shell `export` does not survive a reboot, and unset silently disables tier 0 rather than erroring |
 | face `check-fit` was unrunnable | `package.json` pointed at `scripts/check-fit.ts`; the file is `src/check-fit.ts`. Fixed 2026-08-22 and wired into `build`, so the geometry regression actually gates it now |
+
+---
+
+## Debugging the voice path
+
+Learned expensively on 2026-08-22, when the follow-up window "not working"
+produced three confident wrong diagnoses before the real one. All three were
+plausible, and each was believed because a *fake* confirmed it.
+
+**Test against ground truth, not against a fixture you wrote.** The bug was
+found in minutes once a known Kokoro clip went through the endpointer: 0 of 43
+frames. Before that, three test doubles all passed while the real system
+failed — a fake mic pre-loaded with exactly the right frames, a fake speaker
+with a truthful `is_playing` the real one did not have, and a fake endpointer
+that returned True for any nonzero sample. A passing fake proves the fake.
+
+**Instrument before theorising.** The decisive log line — the follow-up window
+opening and closing — was `log.debug` while the service ran at INFO, so the
+one fact that would have settled it was invisible for hours. If a hypothesis
+cannot be distinguished from its opposite in the log, fix that first.
+
+**Silent failures are the house style here.** A wrong VAD window returns 0.001
+instead of erroring; `is_playing` reports False while audio is queued; a full
+mic queue drops frames with no consumer; `--devices` shows `0 in` for a device
+already open. None raise. Prefer a check that *proves* a thing works over one
+that merely fails to complain — which is what `--check`'s VAD test now does.
+
+**Read the warnings already in the log.** `no speech detected in 3.0s` sat in
+every turn's output for hours, on turns that transcribed perfectly. It was the
+bug, in plain text, dismissed as a level problem.
 
 ---
 
