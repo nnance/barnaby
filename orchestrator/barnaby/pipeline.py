@@ -152,8 +152,13 @@ class Pipeline:
         if not window_ms:
             return None
 
-        while self.speaker.is_playing:
-            await asyncio.sleep(0.02)
+        # Wait for the last clip to actually finish. Polling `is_playing` used
+        # to do this and did not work: the flag is set by the playback task
+        # when it dequeues a clip, so right after end_utterance() it is still
+        # clear, the poll sails through, and the window opens into Barnaby's
+        # own voice. The empty transcript that produced then ended the session
+        # silently, which is exactly the "it needs the wake word again" report.
+        await self.speaker.wait_until_idle()
 
         # Everything queued up to here is the past — the room while Whisper,
         # the LLM and playback were busy, Barnaby's own voice included. Left

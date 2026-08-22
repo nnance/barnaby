@@ -140,10 +140,33 @@ class Speaker:
         self._task: asyncio.Task[None] | None = None
         self._playing = asyncio.Event()
         self._stop = asyncio.Event()
+        # Clips pushed but not yet finished. `_playing` alone cannot answer
+        # "is there audio still to come": it is set by the playback task when
+        # it picks a clip *off* the queue, so between push() and the task
+        # waking there is a window where work is queued and `_playing` is
+        # still clear. Anyone polling `while is_playing` in that window sails
+        # straight through and starts listening while Barnaby talks.
+        self._outstanding = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
 
     @property
     def is_playing(self) -> bool:
-        return self._playing.is_set()
+        """True while any clip is queued or playing.
+
+        Deliberately not just `_playing`: see `_outstanding`. This is the
+        predicate the follow-up window depends on, and getting it wrong opens
+        the microphone into Barnaby's own voice.
+        """
+        return self._outstanding > 0 or self._playing.is_set()
+
+    async def wait_until_idle(self) -> None:
+        """Block until everything queued has finished playing.
+
+        Preferred over polling `is_playing`, which is a property and so cannot
+        close the race by itself.
+        """
+        await self._idle.wait()
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run())
@@ -153,6 +176,7 @@ class Speaker:
             clip = await self.queue.get()
             if clip is None:                       # end-of-utterance sentinel
                 self._playing.clear()
+                self._settle()
                 continue
             self._playing.set()
             self._stop.clear()
@@ -168,8 +192,20 @@ class Speaker:
                     sd.stop()
             except Exception:                       # noqa: BLE001
                 log.exception("playback failed")
+            finally:
+                # In `finally` so a failed clip still decrements. Otherwise one
+                # playback error leaves the counter above zero for good and
+                # Barnaby never listens again.
+                self._outstanding = max(0, self._outstanding - 1)
+                self._settle()
+
+    def _settle(self) -> None:
+        if self._outstanding == 0 and not self._playing.is_set():
+            self._idle.set()
 
     def push(self, clip: np.ndarray) -> None:
+        self._outstanding += 1
+        self._idle.clear()
         self.queue.put_nowait(clip)
 
     def end_utterance(self) -> None:
@@ -180,10 +216,16 @@ class Speaker:
         self._stop.set()
         while not self.queue.empty():
             try:
-                self.queue.get_nowait()
+                dropped = self.queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            # Discarded clips never reach the playback loop, so they have to
+            # be accounted for here or the counter never returns to zero and
+            # is_playing stays true forever.
+            if dropped is not None:
+                self._outstanding = max(0, self._outstanding - 1)
         self._playing.clear()
+        self._settle()
 
 
 def iter_frames(audio: np.ndarray) -> Iterator[np.ndarray]:
