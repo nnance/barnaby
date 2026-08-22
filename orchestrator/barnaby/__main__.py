@@ -4,15 +4,18 @@
   python -m barnaby --check         health-check every service and exit
   python -m barnaby --say "text"    skip audio in, test LLM+TTS+face only
   python -m barnaby --devices       list audio devices and exit
+  python -m barnaby --levels        live input meter, per channel
+  python -m barnaby --record 5      capture what the pipeline hears, to a wav
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
+import math
 import sys
 
-from .audio import Microphone, Speaker
+from .audio import FRAME, SAMPLE_RATE, Microphone, Speaker
 from .clients import ASR, LLM, TTS, HomeAssistant, health
 from .config import Config
 from .face import FaceServer
@@ -48,6 +51,74 @@ async def check(cfg: Config) -> int:
     return 0 if ok else 1
 
 
+def levels(cfg: Config) -> int:
+    """Live per-channel input meter.
+
+    Two jobs. Before the array arrives it answers "is anything reaching the mic
+    at all", which silence and a misconfigured device look identical without.
+    After it arrives it tells you which channel is the beamformed one — speak
+    off-axis and ch0 should stay steadier than the raw capsules.
+
+    Opens at the same rate and frame size the pipeline uses, so a device that
+    fails here fails there too.
+    """
+    import numpy as np
+    import sounddevice as sd
+
+    device = cfg.audio.input_device
+    channels = cfg.audio.input_channels
+    if channels is None:
+        channels = int(sd.query_devices(device, "input")["max_input_channels"])
+
+    print(f"{device or 'default'} — {channels} channel(s) at {SAMPLE_RATE} Hz. "
+          f"'*' marks ch{cfg.audio.input_channel}, the one Barnaby listens to.")
+    print("Speak. Bars should move. Ctrl-C to stop.\n")
+
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=channels,
+                        dtype="float32", device=device, blocksize=FRAME) as s:
+        try:
+            while True:
+                block, _overflow = s.read(FRAME * 2)
+                rms = np.sqrt(np.mean(np.square(block, dtype=np.float64), axis=0))
+                cells = []
+                for i, v in enumerate(rms):
+                    db = 20 * math.log10(max(float(v), 1e-9))
+                    bars = int(max(0.0, min(1.0, (db + 60) / 60)) * 10)
+                    mark = "*" if i == cfg.audio.input_channel else " "
+                    cells.append(f"{mark}ch{i}{db:5.0f} {'#' * bars:<10}")
+                print(" ".join(cells), end="\r", flush=True)
+        except KeyboardInterrupt:
+            print()
+    return 0
+
+
+async def record(cfg: Config, seconds: float, path: str) -> int:
+    """Capture the exact stream the pipeline sees, to a file you can play back.
+
+    Goes through Microphone, so it applies the configured device *and* the
+    channel selection. A healthy --levels reading on one channel and silence
+    here means input_channel points at the wrong one.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    mic = Microphone(cfg.audio.input_device, cfg.audio.preroll_ms,
+                     cfg.audio.input_channels, cfg.audio.input_channel)
+    await mic.start()
+    print(f"recording {seconds:.0f}s from ch{cfg.audio.input_channel} — speak now")
+    frames = [await mic.queue.get()
+              for _ in range(int(seconds * SAMPLE_RATE / FRAME))]
+    mic.stop()
+
+    audio = np.concatenate(frames)
+    sf.write(path, audio, SAMPLE_RATE)
+    peak = 20 * math.log10(max(float(np.max(np.abs(audio))), 1e-9))
+    rms = 20 * math.log10(max(float(np.sqrt(np.mean(np.square(audio)))), 1e-9))
+    print(f"wrote {path} — peak {peak:.0f} dBFS, rms {rms:.0f} dBFS")
+    print(f"play it back:  aplay {path}")
+    return 0
+
+
 async def main_async(args: argparse.Namespace) -> int:
     cfg = Config.load(args.config)
 
@@ -55,6 +126,10 @@ async def main_async(args: argparse.Namespace) -> int:
         import sounddevice as sd
         print(sd.query_devices())
         return 0
+    if args.levels:
+        return levels(cfg)
+    if args.record:
+        return await record(cfg, args.record, args.record_to)
     if args.check:
         return await check(cfg)
 
@@ -98,7 +173,7 @@ async def main_async(args: argparse.Namespace) -> int:
     mic = Microphone(cfg.audio.input_device, cfg.audio.preroll_ms,
                  cfg.audio.input_channels, cfg.audio.input_channel)
     ep = Endpointer(cfg.audio.hangover_ms, cfg.audio.min_speech_ms,
-                    cfg.audio.max_utterance_ms)
+                    cfg.audio.max_utterance_ms, cfg.audio.vad_threshold)
 
     wake: WakeWord | None = None
     if not args.open_mic:
@@ -135,6 +210,12 @@ def main() -> int:
     p.add_argument("-c", "--config", default="config.yaml")
     p.add_argument("--check", action="store_true", help="health-check and exit")
     p.add_argument("--devices", action="store_true", help="list audio devices")
+    p.add_argument("--levels", action="store_true",
+                   help="live per-channel input meter — is the mic hearing anything?")
+    p.add_argument("--record", type=float, metavar="SECONDS",
+                   help="record the configured device+channel to a wav and exit")
+    p.add_argument("--record-to", default="/tmp/barnaby-capture.wav",
+                   help="where --record writes (default /tmp/barnaby-capture.wav)")
     p.add_argument("--say", metavar="TEXT", help="skip the microphone")
     p.add_argument("--open-mic", action="store_true",
                    help="no wake word — just talk. For testing before one exists.")

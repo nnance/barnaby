@@ -31,6 +31,10 @@ class AudioCfg:
     hangover_ms: int = 350          # lower = snappier, higher = fewer cut-offs
     min_speech_ms: int = 250
     max_utterance_ms: int = 15_000
+    # Silero's speech/not-speech cutoff. Too low and room noise reads as
+    # continuous speech, so the hangover never elapses and every utterance
+    # runs to max_utterance_ms. Raise it on a noisy or high-gain input.
+    vad_threshold: float = 0.5
     barge_in_ms: int = 200
     barge_in_enabled: bool = True   # needs playback routed through the array
     playback_rate: int = 24_000   # 16000 when playing through the XVF3800

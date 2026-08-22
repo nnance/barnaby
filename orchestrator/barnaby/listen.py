@@ -55,11 +55,13 @@ class Endpointer:
     WINDOW = 512          # what Silero v5 expects at 16 kHz
 
     def __init__(self, hangover_ms: int = 350, min_speech_ms: int = 250,
-                 max_utterance_ms: int = 15_000, threshold: float = 0.5):
+                 max_utterance_ms: int = 15_000, threshold: float = 0.5,
+                 no_speech_ms: int = 3_000):
         self.hangover = hangover_ms / 1000
         self.min_speech = min_speech_ms / 1000
         self.max_utterance = max_utterance_ms / 1000
         self.threshold = threshold
+        self.no_speech = no_speech_ms / 1000
         self._sess = None
         self._state = None
         self._names: dict[str, str] = {}
@@ -157,6 +159,13 @@ class Endpointer:
 
         if self.total_s >= self.max_utterance:
             log.warning("utterance hit the %.0fs cap", self.max_utterance)
+            return True
+        # Endpointing needs min_speech before it will fire, so a dead input can
+        # never end a turn early — it stalls for the full cap and transcribes
+        # to nothing. Bail out and say why, rather than hanging for 15 s.
+        if self.speech_s == 0.0 and self.total_s >= self.no_speech:
+            log.warning("no speech detected in %.1fs — input level too low? "
+                        "check `python -m barnaby --levels`", self.total_s)
             return True
         return self.speech_s >= self.min_speech and self.silence_s >= self.hangover
 
