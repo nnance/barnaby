@@ -4,8 +4,8 @@ Backlog item 3. A TypeScript server on the Mac Studio that sits between the Pi
 and rapid-mlx, becoming the home of tool calling and tier routing later.
 
 The reason it exists is **access, not latency**. A Pi→Mac hop is ~1 ms and
-irrelevant next to a 357 ms TTFT. The Pi cannot read the Mac's files or mail,
-and tools have to run where the data is.
+irrelevant next to a TTFT with a 640 ms median. The Pi cannot read the Mac's
+files or mail, and tools have to run where the data is.
 
 ---
 
@@ -128,7 +128,10 @@ are the ones that stop a future proxy from helpfully buffering.
 
 **Abort propagation.** When the Pi disconnects mid-turn — barge-in, or a
 session ending — abort the upstream fetch. Otherwise rapid-mlx keeps
-generating into a socket nobody reads. `req.on('close')` → `AbortController`.
+generating into a socket nobody reads. `res.on('close')` → `AbortController`,
+and it must be `res`: `req` emits close as soon as the request body is read,
+which is *before* the first token, so hooking it there fires on every healthy
+turn and never on a real disconnect. This was written as `req` and was wrong.
 
 **Error behaviour.** If upstream is down, return a **non-streaming** 502 with a
 JSON error. The Pi's `raise_for_status()` turns that into a clean exception and

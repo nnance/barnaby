@@ -65,11 +65,11 @@ if [ "$restart" = 1 ]; then
   # started and immediately died, so without this a broken deploy looks fine.
   if ! ssh "$HOST" "systemctl --user is-active --quiet barnaby"; then
     echo "!! barnaby is not running — last 30 log lines:" >&2
-    ssh "$HOST" "journalctl --user -u barnaby -n 30 --no-pager" >&2
+    ssh "$HOST" "journalctl --user-unit barnaby -n 30 --no-pager" >&2
     exit 1
   fi
   ssh "$HOST" "systemctl --user status barnaby --no-pager -n 5" || true
 fi
 
-[ "$logs" = 1 ] && exec ssh "$HOST" "journalctl --user -u barnaby -f"
+[ "$logs" = 1 ] && exec ssh "$HOST" "journalctl --user-unit barnaby -f"
 echo "==> done"

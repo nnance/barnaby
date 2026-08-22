@@ -49,7 +49,80 @@ async def check(cfg: Config) -> int:
         up = await health(url)
         ok = ok and up
         print(f"{name} {'up  ' if up else 'DOWN'}  {url}")
-    return 0 if ok else 1
+
+    return 0 if (await check_vad(cfg) and ok) else 1
+
+
+async def check_vad(cfg: Config) -> bool:
+    """Prove the VAD actually detects speech, using TTS as ground truth.
+
+    This exists because the VAD failed *silently* for a whole session: the
+    window size was wrong, so it returned ~0.001 for every frame and reported
+    silence forever. Nothing errored. Endpointing quietly fell through to its
+    3 s no-speech bail-out, the follow-up window heard nothing, and Whisper
+    kept transcribing perfectly because it never needed the VAD — so every
+    obvious check said the microphone was fine.
+
+    Ground truth is a Kokoro clip rather than the microphone, deliberately: no
+    room, no levels, no person needed. If this passes, a silent room is a
+    silent room; if it fails, nothing downstream of the VAD can work.
+    """
+    import numpy as np
+
+    from .clients import TTS
+    from .listen import Endpointer
+
+    ep = Endpointer(cfg.audio.hangover_ms, cfg.audio.min_speech_ms,
+                    cfg.audio.max_utterance_ms, cfg.audio.vad_threshold)
+    try:
+        ep.load()
+    except Exception as exc:                          # noqa: BLE001
+        print(f"VAD   DOWN  could not load: {exc}")
+        return False
+
+    try:
+        tts = TTS(cfg.mac.tts_url, cfg.mac.tts_model, cfg.mac.tts_voice,
+                  SAMPLE_RATE)
+        clip = await tts.synth("What about tomorrow? "
+                               "Will it rain in the afternoon?")
+    except Exception:                                 # noqa: BLE001
+        clip = None                                   # TTS down; probe instead
+
+    if clip is None:
+        # TTS unreachable, or called from inside a running loop. Fall back to
+        # the same probe load() uses — weaker evidence, but it still catches
+        # the failure that actually happened.
+        speech_like = _voiced_probe()
+        hits = sum(ep.is_speech(speech_like[i:i + FRAME])
+                   for i in range(0, len(speech_like) - FRAME, FRAME))
+        got = hits > 0
+        print(f"VAD   {'ok  ' if got else 'DOWN'}  window {ep.WINDOW}, "
+              f"{'responds to' if got else 'DEAD on'} a voiced probe"
+              f"{'' if got else ' — endpointing and follow-up cannot work'}")
+        return got
+
+    frames = [clip[i:i + FRAME] for i in range(0, len(clip) - FRAME, FRAME)]
+    hits = sum(ep.is_speech(f) for f in frames)
+    frac = hits / max(len(frames), 1)
+    got = frac >= 0.2
+    print(f"VAD   {'ok  ' if got else 'DOWN'}  window {ep.WINDOW}, "
+          f"{frac:.0%} of speech frames detected"
+          f"{'' if got else ' — endpointing and follow-up cannot work'}")
+    return got
+
+
+def _voiced_probe() -> "np.ndarray":
+    """A buzz at vocal-fold pitch with a drifting envelope. Not speech, but
+    enough to tell a working VAD from one that returns zero for everything."""
+    import numpy as np
+
+    n = 16384
+    t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
+    sig = np.zeros(n, dtype=np.float32)
+    for h in range(1, 16):
+        sig += np.sin(2 * np.pi * 140 * h * t) / h
+    sig *= (1 + 0.5 * np.sin(2 * np.pi * 3.0 * t)).astype(np.float32)
+    return (sig * (0.3 / max(float(np.abs(sig).max()), 1e-9))).astype(np.float32)
 
 
 def levels(cfg: Config) -> int:

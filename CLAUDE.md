@@ -68,6 +68,13 @@ Diagnostics, in the order you want them: `--devices` · `--levels` (per-channel
 dBFS meter) · `--record N` (capture the exact device+channel to a wav) ·
 `--check` · `--say` · `--open-mic` · `--latency` (recorded turn latencies).
 
+**`--check` now proves the VAD detects speech**, synthesising a Kokoro clip and
+running it through the endpointer — no microphone, room or person involved. It
+prints `VAD ok window 576, 70% of speech frames detected`, or `DOWN ... 0%`.
+Run it first when anything voice-related misbehaves: a dead VAD disables
+endpointing and the follow-up window while Whisper keeps transcribing fine, so
+every other symptom points at the microphone instead.
+
 **`face/`** — TypeScript + Vite + Canvas 2D, 480×480.
 `expressions.ts` state table · `layout.ts` mm constants · `face.ts` renderer ·
 `src/check-fit.ts` **geometry regression, gates `pnpm build`**
@@ -108,34 +115,45 @@ kitchen that is the TV or the extractor, not a user), or on a tier 0 command.
 History expires separately on `session_idle_ms` (3 min), so breakfast is not
 still in context at dinner.
 
+**Confirmed working 2026-08-22**, wake word through to a pronoun-dependent
+follow-up: "why is the sky blue" → spoke 9.2 s → window opened → "is that how
+the rainbow works?" answered with no wake word, resolving "that" against
+history. Session then closed cleanly on silence.
+
 **10 s is deliberately generous and is the first knob to cut** if the
 television starts winning turns — inside the window there is no wake word in
-front of the mic, and VAD cannot tell a person from a TV. Untested against a
-real kitchen so far.
+front of the mic, and VAD cannot tell a person from a TV. Not yet tested
+against a TV actually running.
 
-**Baseline (2026-08-22, live mic on the array, tier 1)** — the real one, with
-wake word, VAD endpointing and beamforming in the path:
+Note the wait before the window opens is the *answer length*: it opens only
+once playback drains, so a 10 s answer means 10 s before a follow-up is
+possible. `max_tokens` is deliberately back at 400 — Nick prefers the fuller
+answers, and this is the cost.
+
+**Baseline (2026-08-22, live mic on the array, tier 1)** — medians over 12
+recorded turns, with wake word, VAD endpointing and beamforming in the path:
 
 ```
-wake -> endpoint              2833.0 ms   ← the user talking; not our latency
+wake -> endpoint              2821.2 ms   ← the user talking; not our latency
 endpoint -> asr_sent             0.0 ms
-asr_sent -> asr_done           379.1 ms   ← Whisper on the Mac
-asr_done -> llm_sent             0.1 ms   ← no tier 0; nothing to match against
-llm_sent -> first_token        357.5 ms
-first_token -> first_sentence  200.9 ms   ← buffering to a clause boundary
-first_sentence -> speaking     304.5 ms   ← Kokoro first clip
-TIME TO FIRST AUDIO           1242.1 ms   budget 2000  OK
+asr_sent -> asr_done           408.4 ms   ← Whisper on the Mac
+asr_done -> llm_sent             0.2 ms   ← no tier 0; nothing to match against
+llm_sent -> first_token        640.5 ms   ← 345-760, the widest-spread stage
+first_token -> first_sentence  275.9 ms   ← buffering to a clause boundary
+first_sentence -> speaking     285.9 ms   ← Kokoro first clip
+TIME TO FIRST AUDIO           1608.2 ms   budget 2000 — 12/12 within it
 ```
 
-Faster than the older `--say` baseline (1488 ms) despite doing strictly more
-work. Two stages moved: **TTFT 680 → 357 ms**, which was the largest stage and
-the standing suspicion about `--no-think`; and Kokoro's first clip 603 → 305 ms.
-Neither was changed deliberately, so treat the improvement as unexplained —
-warm weights on the Mac is the obvious guess. `wake -> endpoint` is the user
-speaking and does not count against the budget.
+**Read these rather than any single turn.** An earlier one-off showed TTFT at
+357 ms and was written up here as an unexplained improvement over the 680 ms
+`--say` baseline; across 12 turns the median is 640 ms with a 345-760 ms
+spread, so that reading was just the fast end of normal variance. Nothing
+improved and nothing regressed — the sample was too small to say either.
+Getting this wrong in the obvious direction is what persistence is for.
 
-Previous, superseded (2026-08-21, `--say`, no mic): TTFT 680 ms, first clip
-603 ms, 1488 ms to first audio.
+`wake -> endpoint` is the user speaking and does not count against the budget.
+
+Superseded (2026-08-21, `--say`, no mic): TTFT 680 ms, 1488 ms to first audio.
 
 Mac shows low GPU and near-zero CPU at this load — lots of headroom.
 
@@ -286,14 +304,50 @@ identity, ESP32, CAD.
 | **Every 15 s turn has two opposite causes** | Endpointing needs `min_speech` *before* it can fire, so a dead input can never end a turn early — it runs to `max_utterance_ms` and transcribes to nothing, exactly like an input so hot that noise reads as continuous speech. Identical symptom, opposite fix. `--levels` tells them apart |
 | Wrong `input_device` fails silently | The Waveshare exposes 2 input channels, so pointing `input_device` at it *succeeds* and hands you a bare mic with no beamforming. Looks like "Whisper is bad." `--record N` then `aplay` is the check — `arecord -c 2` can't, it plays both channels |
 | openwakeword needs `download_models()` | Mandatory **even with a custom model** — the shared melspectrogram and embedding models are separate. Skip it and `Model(...)` fails as if your `.onnx` were corrupt. `listen.py` pins `inference_framework="onnx"`, so the ONNX variants specifically must be present |
+| A wrong Silero window size is **silent** | The model accepts any size, runs, and returns ~0.001 for every frame forever. `WINDOW` was 512 against an export wanting 576: measured on real speech, 576 detects 65-70% of frames and 512 detects **0%**. Symptom is a VAD that never fires, so endpointing falls through to the 3 s no-speech bail-out and the follow-up window hears nothing — while Whisper still transcribes fine, because it never needed the VAD. `load()` now probes for inertness and warns |
+| "no speech detected in 3.0s" on a turn that transcribed perfectly | Not a microphone problem. It means the VAD returned False for every frame while Whisper heard you fine — i.e. the VAD is broken, not the input. This sat in the log for hours reading as a level problem |
 | `preroll_ms` reaches into the wake phrase | At 500 ms Whisper transcribes the wake word as part of the question ("Harvest, what's the weather"). Now 250. Retune per wake model — detection latency differs. Matters most for intent matching, which is brittle to a leading junk word |
 | Kokoro voice list | Undocumented: `curl http://<mac>:8002/v1/audio/voices` → 53 voices. `<lang><gender>_<name>`, a=American b=British, f/m. Currently `bm_fable` |
-| Deploying to the Pi | `./deploy.sh` — rsyncs and restarts the service. It is a **user** unit, so `systemctl --user`, never sudo (`admin` needs a password for sudo, which is why it is not a system unit). `journalctl --user -u barnaby -f` for the log |
+| Diagnosing "he can't hear me" | `python -m barnaby --check` first — it now includes a VAD speech test. A VAD returning zero looks exactly like a dead mic but is not, and the mic is the more tempting thing to blame. Only after that: `--levels`, then `--record N` |
+| A quiet-room level reading proves nothing | Ambient noise reads ~-45 dBFS on *every* device, working or not, and Whisper hallucinates fluent sentences into near-silence ("I love you", "We'll be right back"). Both were mistaken for hardware faults this session. Play a known tone and capture it, or speak known words |
+| Reading the service log | `journalctl --user-unit barnaby -f`. **Not** `--user -u barnaby`, which looks in the user's own journal, finds nothing, and prints "No journal files were found" as if the service had never run. The unit's stdout goes to the *system* journal; `admin` reads it via the `adm` group |
+| The journal is volatile | `/var/log/journal` does not exist, so `Storage=auto` keeps everything in `/run` and a reboot loses it. `sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal` fixes it, and needs a password |
+| Deploying to the Pi | `./deploy.sh` — rsyncs and restarts the service. It is a **user** unit, so `systemctl --user`, never sudo (`admin` needs a password for sudo, which is why it is not a system unit). `journalctl --user-unit barnaby -f` for the log |
 | `HA_TOKEN` | Put it in `~/barnaby/barnaby.env`, read by the unit's `EnvironmentFile`. A shell `export` does not survive a reboot, and unset silently disables tier 0 rather than erroring |
 | Agent server abort must hook `res`, not `req` | `req` emits `close` as soon as the request body is read — *before* the first token — so hooking it there fires on every healthy turn and never on a real disconnect, and rapid-mlx keeps generating into a dead socket. `res` closes only when the socket actually goes |
 | There is no drop-in 8-bit MTP model | `mlx-community/Qwen3.8-27B-MTP-8bit` is 451 MB — the MTP **draft head**, not a model. Real 8-bit is 29.5 GB and non-MTP, so upgrading costs +13.4 GB *and* speculative decoding at once. See `agent/MODEL-NOTES.md` |
 | Thinking is already off server-side | `reasoning_parser: null`, `default_reasoning_level: "none"`. So a dropped `chat_template_kwargs` would **not** show up as `<think>` tags — behaviour cannot detect that regression, only a byte-level assertion on the forwarded body can |
 | face `check-fit` was unrunnable | `package.json` pointed at `scripts/check-fit.ts`; the file is `src/check-fit.ts`. Fixed 2026-08-22 and wired into `build`, so the geometry regression actually gates it now |
+
+---
+
+## Debugging the voice path
+
+Learned expensively on 2026-08-22, when the follow-up window "not working"
+produced three confident wrong diagnoses before the real one. All three were
+plausible, and each was believed because a *fake* confirmed it.
+
+**Test against ground truth, not against a fixture you wrote.** The bug was
+found in minutes once a known Kokoro clip went through the endpointer: 0 of 43
+frames. Before that, three test doubles all passed while the real system
+failed — a fake mic pre-loaded with exactly the right frames, a fake speaker
+with a truthful `is_playing` the real one did not have, and a fake endpointer
+that returned True for any nonzero sample. A passing fake proves the fake.
+
+**Instrument before theorising.** The decisive log line — the follow-up window
+opening and closing — was `log.debug` while the service ran at INFO, so the
+one fact that would have settled it was invisible for hours. If a hypothesis
+cannot be distinguished from its opposite in the log, fix that first.
+
+**Silent failures are the house style here.** A wrong VAD window returns 0.001
+instead of erroring; `is_playing` reports False while audio is queued; a full
+mic queue drops frames with no consumer; `--devices` shows `0 in` for a device
+already open. None raise. Prefer a check that *proves* a thing works over one
+that merely fails to complain — which is what `--check`'s VAD test now does.
+
+**Read the warnings already in the log.** `no speech detected in 3.0s` sat in
+every turn's output for hours, on turns that transcribed perfectly. It was the
+bug, in plain text, dismissed as a level problem.
 
 ---
 

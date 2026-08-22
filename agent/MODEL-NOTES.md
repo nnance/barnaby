@@ -29,11 +29,17 @@ Through the gateway, five kitchen-shaped questions, warmup discarded
 (`node bench.mjs`):
 
 ```
-MEDIAN ttft=472ms   tok/s=40.5   markdown leaked into speech: 0/5
+MEDIAN ttft=425ms   tok/s=40.5   markdown leaked into speech: 0/5
 ```
 
 Measured from a Mac mini, so this **includes a network hop to the Studio** that
-the real deployment does not have. Treat 472 ms as a ceiling, not the number.
+the real deployment does not have.
+
+It is also **not comparable to the Pi's 640 ms median** in the backlog: that one
+is measured on the Pi, through the wake word and VAD, over 12 real turns with a
+345-760 ms spread. This is five scripted questions from a different machine.
+Two runs here read 472 and 425 ms, which is a sense of the variance — do not
+treat either as a number to defend.
 
 ## The trap: there is no drop-in 8-bit MTP
 

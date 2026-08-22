@@ -19,7 +19,7 @@
 # Day to day:
 #   systemctl --user restart barnaby    # after an rsync
 #   systemctl --user status barnaby
-#   journalctl --user -u barnaby -f     # the log, which used to be a terminal
+#   journalctl --user-unit barnaby -f     # the log, which used to be a terminal
 Description=Barnaby orchestrator
 Documentation=https://github.com/nicknance/barnaby
 # The network is not optional — ASR, LLM and TTS all live on the Mac Studio,

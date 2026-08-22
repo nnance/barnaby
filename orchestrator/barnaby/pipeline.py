@@ -90,6 +90,10 @@ class Pipeline:
 
             if self._triggered(frame):
                 await self._turn(preroll=self.mic.preroll())
+                # Same reason as the follow-up window: what queued up during
+                # the turn is the past, and feeding several seconds of it to
+                # the wake detector risks waking on Barnaby's own reply.
+                self.mic.flush()
                 self._idle_frames = 0
                 continue
 
@@ -129,7 +133,7 @@ class Pipeline:
                      idle / 1000)
             self.history.clear()
 
-    async def _await_follow_up(self) -> np.ndarray | None:
+    async def _await_follow_up(self, turn: Turn | None = None) -> np.ndarray | None:
         """After speaking, listen for a follow-up without a wake word.
 
         Returns pre-roll for the next turn if the user starts talking inside
@@ -148,8 +152,24 @@ class Pipeline:
         if not window_ms:
             return None
 
-        while self.speaker.is_playing:
-            await asyncio.sleep(0.02)
+        # Wait for the last clip to actually finish. Polling `is_playing` used
+        # to do this and did not work: the flag is set by the playback task
+        # when it dequeues a clip, so right after end_utterance() it is still
+        # clear, the poll sails through, and the window opens into Barnaby's
+        # own voice. The empty transcript that produced then ended the session
+        # silently, which is exactly the "it needs the wake word again" report.
+        await self.speaker.wait_until_idle()
+        if turn is not None:
+            turn.mark("playback_done")
+            log.info("spoke for %.1fs; listening %d ms for a follow-up",
+                     (turn.since("speaking", "playback_done") or 0) / 1000,
+                     window_ms)
+
+        # Everything queued up to here is the past — the room while Whisper,
+        # the LLM and playback were busy, Barnaby's own voice included. Left
+        # in, it is read in a single burst the instant the window opens, which
+        # spends the window before the user has said anything. Listen from now.
+        self.mic.flush()
 
         await self.face.set_mood("listening")
         self.ep.reset()
@@ -170,7 +190,7 @@ class Pipeline:
             else:
                 speech_frames = 0
 
-        log.debug("follow-up window closed")
+        log.info("follow-up window closed after %d ms — session over", window_ms)
         return None
 
     async def _turn(self, preroll: np.ndarray) -> None:
@@ -223,7 +243,7 @@ class Pipeline:
                 await self.face.set_mood("neutral")
                 return
 
-            preroll = await self._await_follow_up()
+            preroll = await self._await_follow_up(turn)
             if preroll is None:
                 await self.face.set_mood("neutral")
                 return

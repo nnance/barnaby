@@ -230,7 +230,7 @@ sudo and a deploy should not require a human to type it. So every command is
 ```bash
 systemctl --user restart barnaby
 systemctl --user status barnaby
-journalctl --user -u barnaby -f     # the log that used to be your terminal
+journalctl --user-unit barnaby -f     # the log that used to be your terminal
 ```
 
 Put `HA_TOKEN` in `~/barnaby/barnaby.env` (`HA_TOKEN=...`, no `export`), which

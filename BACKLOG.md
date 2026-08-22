@@ -1,40 +1,20 @@
 ## Next, in order
 
-1. **Active session — built 2026-08-22, needs a kitchen test.** A wake word
-   now opens a conversation: after speaking, Barnaby stays listening for
-   `follow_up_ms` and VAD alone starts the next turn. The window opens only
-   after playback drains, so his own voice cannot trigger it. Sessions end on
-   silence, on an empty transcript, or on a tier 0 command; history expires
-   separately on `session_idle_ms` (3 min).
-
-   How the four decisions were settled:
-   - **Window: 10 s**, chosen deliberately generous. Tested only against fakes.
-   - **Tier 0 does not open one** (`follow_up_after_tier0: false`) — device
-     commands never reach history, so a follow-up would have nothing to
-     resolve against. Moot until a real tier 0 exists.
-   - **History expires on time**, not with the window, so re-waking inside a
-     session still resolves "what about tomorrow".
-   - **Face shows `listening`** while the window is open.
-
-   What is left:
-   - **Find the real number for `follow_up_ms`.** 10 s is an open mic with no
-     wake word in front of it, in a room with a television, and VAD cannot
-     tell a person from a TV. Expect to cut it. Watch for turns nobody started.
-   - **Check the empty-transcript exit is right.** A turn the TV opened ends
-     the session silently, which is the intent; confirm it does not also eat
-     legitimate quiet follow-ups.
-
-2. **Wake word.** Train "barnaby" from synthetic speech — `hey_jarvis` already
+1. **Wake word.** Train "barnaby" from synthetic speech — `hey_jarvis` already
    proves the path — then test against the real kitchen, TV on, extractor
    running. Retune `preroll_ms` at the same time; too much of it and the wake
    phrase lands in the transcript.
-3. **The Node agent server on the Mac. Phase 1 built 2026-08-22 — needs
+2. **The Node agent server on the Mac. Phase 1 built 2026-08-22 — needs
    deploying to the Studio and one Pi-side test.** Lives in `agent/`, zero
-   runtime dependencies, no build step. Passthrough on :8100, 18 tests green,
-   and measured against the real model from a Mac mini at **median TTFT 425 ms,
-   40.5 tok/s** with gateway overhead in the noise (-9 ms and +7 ms on two A/B
-   runs). Body forwarding is byte-identical, verified against a real
-   interception, so `chat_template_kwargs` survives.
+   runtime dependencies, no build step. Passthrough on :8100, 18 tests green.
+   Body forwarding is byte-identical, verified against a real interception, so
+   `chat_template_kwargs` survives.
+
+   Measured from a **Mac mini**, so including a network hop the real
+   deployment will not have: median TTFT 425 ms at 40.5 tok/s, gateway
+   overhead in the noise (-9 ms and +7 ms on two A/B runs against direct
+   rapid-mlx). Not comparable to the Pi's 640 ms median in item 5 — different
+   machine, different path, no wake word or VAD in front of it.
 
    What is left:
    - **Run it on the Studio**, where upstream is loopback rather than a network
@@ -42,7 +22,9 @@
      phase 2's tools need the logged-in user's files.
    - **Point `llm_url` at :8100** and confirm `--latency` medians on the Pi do
      not move. That is the acceptance gate; a TTFT regression means buffering.
-   - **Do not change the model in the same step** — see item 6. Two changes at
+     Compare against the recorded spread, not a single turn — item 5 is exactly
+     the trap of reading one fast turn as a change.
+   - **Do not change the model in the same step** — see item 5. Two changes at
      once makes any regression unattributable.
 
    Original notes, still true:
@@ -59,7 +41,7 @@
    - It is also the natural place to route per-turn between the local model and
      a frontier one, which may be what makes tool calling work at all. Privacy
      cost, chosen deliberately.
-4. **Tool calling.** Tier 1 answers but cannot act. Two things to plan for:
+3. **Tool calling.** Tier 1 answers but cannot act. Two things to plan for:
    - **It breaks the 2 s budget inherently.** A tool turn is two inference
      rounds before the first speakable token — ~1.4 s before the tool even
      runs. Decide what he does in the gap; the face already goes `curious`, but
@@ -72,31 +54,57 @@
      allowlist rather than an open plugin surface, confirmation for side
      effects. Benchmark reliability too — small models are weak at multi-step
      tool use.
-5. **Identity, or some way to know who is talking.** No face or voice
+4. **Identity, or some way to know who is talking.** No face or voice
    recognition, so personal data stays off limits and the system prompt is the
    only thing enforcing it. Blocks anything personal in tool calling.
-6. **The 8-bit model — and it is not the swap it looks like.** There is no
-   drop-in 8-bit MTP build: `mlx-community/Qwen3.8-27B-MTP-8bit` is 451 MB, the
-   MTP **draft head**, not a servable model. Real 8-bit is 29.5 GB and non-MTP,
-   so the upgrade costs **+13.4 GB resident and speculative decoding at the
-   same time** — two reasons to expect TTFT to get worse. Do it as the first
-   step of *tool calling*, not of the gateway, where it has a real motive and a
-   real number to move (tool-call success rate, not latency). Serve it on 8003
-   alongside 4-bit rather than replacing it — the gateway already routes, so
-   trying it costs no Pi change and reverting is deleting a route.
+5. **TTFT, the largest stage we control.** Median 640 ms over 12 recorded
+   turns, spread 345-760. An earlier single turn read 357 ms and was briefly
+   believed to be an improvement; it was just the fast end of the spread, so
+   there is nothing to explain and nothing has regressed. Still worth
+   confirming `--no-think` is actually in effect — though note the server
+   reports `reasoning_parser: null` and `default_reasoning_level: "none"`, so
+   thinking may already be off independently of the flag.
+
+   **8-bit is not the swap it looks like, and the thin headroom makes that
+   worse.** There is no drop-in 8-bit MTP build: today's model is
+   `Qwen3.8-27B-4bit-MTP-MLX` and `mlx-community/Qwen3.8-27B-MTP-8bit` is
+   451 MB — the MTP **draft head**, not a servable model. Real 8-bit is 29.5 GB
+   and non-MTP, so the upgrade costs **+13.4 GB resident and speculative
+   decoding at the same time**, two reasons to expect TTFT to get *worse*. With
+   total first audio at 1608 ms against a 2000 ms budget there is not much to
+   give away.
+
+   So do it for tool-call reliability, as the first step of item 3, where it
+   has a real number to move — and serve it on 8003 **alongside** 4-bit rather
+   than replacing it. The gateway is already the routing seam, so trying it
+   costs no Pi change and reverting is deleting a route.
    `agent/MODEL-NOTES.md` has the sizes and the procedure; `agent/bench.mjs`
    runs the comparison.
-7. **TTFT — mostly resolved itself, but find out why.** It was 680 ms and the
-   largest stage; on the 2026-08-22 live-mic run it was **357 ms**, with
-   Kokoro's first clip also down 603 → 305 ms and total first audio at 1242 ms.
-   Nothing was changed to cause that, so the number is not yet trustworthy —
-   warm weights on the Mac is the obvious guess. Confirm it holds from cold
-   before treating the headroom as real. Still worth confirming `--no-think` is
-   actually in effect. 8-bit remains interesting for tool-call reliability
-   rather than for latency, and there is now clearly room for it.
-8. **Camera + face tracking** when the Wide arrives — emits `look` on the face
+6. **Camera + face tracking** when the Wide arrives — emits `look` on the face
    channel, which the renderer already consumes.
-9. **ESP32 firmware.**
+7. **ESP32 firmware.**
+
+**Two small things needing a password, so left for Nick.**
+
+- **Make the journal persist.** `/var/log/journal` does not exist, so
+  `Storage=auto` keeps logs in `/run` and a reboot loses them. Today's VAD bug
+  was found by reading the journal; losing it on reboot is worse than it
+  sounds. `sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create
+  --prefix /var/log/journal`
+- **`HA_TOKEN` in `~/barnaby/barnaby.env`** whenever HA exists. The unit
+  already reads it via `EnvironmentFile`; unset, it silently disables tier 0.
+
+**Working, but only tested in a quiet room — the active session.** A wake word
+opens a conversation and a follow-up needs no second wake word (confirmed
+2026-08-22, including a pronoun resolved against history). Two things to watch
+now that it is in daily use:
+
+- **`follow_up_ms` is 10 s and the TV has not been tried against it.** Inside
+  the window there is no wake word, only VAD, which cannot tell a person from
+  a television. Cut it if turns start appearing that nobody began.
+- **The wait before the window opens is the answer length**, since it opens
+  only once playback drains. A 10 s answer means 10 s before a follow-up is
+  possible. `max_tokens` is 400 by choice; that is the cost.
 
 **Not blocking anything, so unnumbered — acoustic characterisation.** The array
 is confirmed working end to end (2026-08-22), including with music playing, and

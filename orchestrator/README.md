@@ -179,7 +179,7 @@ there is nothing to do for it either way.
 
 **A reboot is fine now.** `barnaby.service` is a systemd **user** unit with
 lingering enabled, so it starts at boot without anyone logging in. Deploy and
-restart with `./deploy.sh` from the repo root; `journalctl --user -u barnaby -f`
+restart with `./deploy.sh` from the repo root; `journalctl --user-unit barnaby -f`
 is the log that used to be whichever terminal you happened to start it in.
 
 It is a user unit rather than a system one because `admin` needs a password for
