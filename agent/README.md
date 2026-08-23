@@ -116,5 +116,32 @@ delay is between the gateway and the Pi, not in the model.
 | Abort must listen on `res`, not `req` | `req` emits `close` as soon as the request body is read — *before* the first token. Hooking it there fires on every healthy turn and never on a real disconnect, so upstream keeps generating into a dead socket. `res` closes only when the socket actually goes away |
 | `127.0.0.1` is wrong off-Studio | The default assumes this runs on the Studio beside rapid-mlx. Developing on another Mac, set `BARNABY_UPSTREAM_URL` or every request 502s with `ECONNREFUSED` while `curl` to the hostname works fine |
 | rapid-mlx sends `: keepalive` comment frames | Not `data:` lines. The Pi's `startswith("data: ")` filter ignores them correctly; anything that parses this stream in phase 2 must too |
-| No `enum`, `namespace`, or constructor parameter properties | Node strips types rather than compiling them, so anything that *emits* code is rejected at runtime — and **`tsc --noEmit` does not catch it**. `readonly status: number` as a constructor parameter looks fine to `tsc` and dies under `node`. Write plain fields and assign in the body. `pnpm test` is the check that matters |
+| No `enum`, `namespace`, or constructor parameter properties | Node strips types rather than compiling them, so anything that *emits* code is rejected at runtime — and **`tsc --noEmit` does not catch it**. `readonly status: number` as a constructor parameter looks fine to `tsc` and dies under `node`. Write plain fields and assign in the body. `pnpm test` is the check that matters. See "On `tsx`" below — this is a live trade, not a permanent rule |
 | Errors are not streamed | A failure returns a non-streaming JSON 4xx/5xx on purpose. `httpx.raise_for_status()` turns that into a clean fault; an empty 200 stream looks like a model with nothing to say |
+
+
+## On `tsx` — not now, but not a hard no
+
+`tsx` would lift the strip-only restriction above: it transpiles rather than
+strips, so `enum`, `namespace`, decorators and constructor parameter properties
+all work. It is a **devDependency and a transpile step, not a runtime
+dependency** — the deployed process would still be Node running the result.
+
+It is not in yet only because the friction so far does not justify the change.
+One class, once, cost three extra lines. That is a thin reason to add a build
+step to the thing that stands between the Pi and its model.
+
+**Reasons to revisit, any of which is enough:**
+
+- Two or three more real collisions with strip-only, especially in the tool
+  layer as it grows. One is a curiosity; several is a tax.
+- Wanting decorators, most likely for tool registration — declaring a tool by
+  annotating a class is genuinely nicer than the current registry function.
+- A dependency that ships types requiring transpilation.
+- The runtime constraint biting somewhere `pnpm test` does not reach, since
+  `tsc --noEmit` is blind to it.
+
+**What to weigh against it:** today `node src/main.ts` *is* the deployment, and
+there is no transform between the source you read and the bytes that run. That
+is worth keeping while it is free. It stops being free the moment the code
+starts contorting to avoid the restriction — at which point take `tsx`.

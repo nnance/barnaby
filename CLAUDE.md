@@ -44,7 +44,8 @@ Mac command lines — **`--host 0.0.0.0` and `--no-think` are both required:**
 
 ```bash
 rapid-mlx serve whisper-large-v3-turbo --port 8000 --host 0.0.0.0
-rapid-mlx serve qwen3.8-27b-4bit       --port 8001 --host 0.0.0.0 --no-think
+rapid-mlx serve lmstudio-community/Qwen3.6-35B-A3B-MLX-8bit \
+  --served-model-name qwen3.6-35b-a3b-8bit --port 8001 --host 0.0.0.0 --no-think
 rapid-mlx serve kokoro                 --port 8002 --host 0.0.0.0
 ```
 
@@ -315,7 +316,7 @@ identity, ESP32, CAD.
 | Deploying to the Pi | `./deploy.sh` — rsyncs and restarts the service. It is a **user** unit, so `systemctl --user`, never sudo (`admin` needs a password for sudo, which is why it is not a system unit). `journalctl --user-unit barnaby -f` for the log |
 | `HA_TOKEN` | Put it in `~/barnaby/barnaby.env`, read by the unit's `EnvironmentFile`. A shell `export` does not survive a reboot, and unset silently disables tier 0 rather than erroring |
 | The agent server picks the model, not the Pi | `BARNABY_MODEL` overrides whatever the Pi sends. Tools only work with a model that calls them reliably, so tools and model are one decision — when they were split, switching models needed edits on two machines and missing one 404'd every turn |
-| Node strips types, it does not compile them | So `enum`, `namespace` and constructor parameter properties (`constructor(readonly x: number)`) fail **at runtime**, and `tsc --noEmit` passes them happily. Plain field declarations plus assignment in the constructor body. `pnpm test` is what catches it |
+| Node strips types, it does not compile them | So `enum`, `namespace` and constructor parameter properties (`constructor(readonly x: number)`) fail **at runtime**, and `tsc --noEmit` passes them happily. Plain field declarations plus assignment in the constructor body. `pnpm test` is what catches it. **Not a permanent rule** — `tsx` (a devDependency and transpile step, not a runtime dependency) lifts it whenever the friction earns the build step; `agent/README.md` records what would justify that |
 | Agent server abort must hook `res`, not `req` | `req` emits `close` as soon as the request body is read — *before* the first token — so hooking it there fires on every healthy turn and never on a real disconnect, and rapid-mlx keeps generating into a dead socket. `res` closes only when the socket actually goes |
 | There is no drop-in 8-bit MTP model | `mlx-community/Qwen3.8-27B-MTP-8bit` is 451 MB — the MTP **draft head**, not a model. Real 8-bit is 29.5 GB and non-MTP, so upgrading costs +13.4 GB *and* speculative decoding at once. See `agent/MODEL-NOTES.md` |
 | Thinking is already off server-side | `reasoning_parser: null`, `default_reasoning_level: "none"`. So a dropped `chat_template_kwargs` would **not** show up as `<think>` tags — behaviour cannot detect that regression, only a byte-level assertion on the forwarded body can |
