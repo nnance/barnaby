@@ -54,6 +54,29 @@ export interface AgentResult {
 const encoder = new TextEncoder();
 
 /**
+ * An upstream failure, carrying its status.
+ *
+ * The status matters: a turn that dies before speaking must reach the Pi as a
+ * non-2xx, so httpx's raise_for_status() raises and Barnaby shows a fault. An
+ * empty 200 stream is silence he cannot explain.
+ */
+export class UpstreamError extends Error {
+	// Plain fields, not constructor parameter properties: those emit code, and
+	// Node's strip-only type removal rejects them outright.
+	readonly status: number;
+	readonly detail: string;
+
+	constructor(status: number, detail = "") {
+		super(
+			`upstream returned ${status}${detail === "" ? "" : `: ${detail.slice(0, 200)}`}`,
+		);
+		this.name = "UpstreamError";
+		this.status = status;
+		this.detail = detail;
+	}
+}
+
+/**
  * Text that reads as "I am about to go and look this up".
  *
  * Only used to decide whether a tool-less round deserves one retry, so a false
@@ -89,7 +112,9 @@ export async function runTurn(
 ): Promise<AgentResult> {
 	const messages = [...body.messages];
 	const specs: ToolSpec[] = [...registry.values()].map(toSpec);
-	const model = body.model ?? "unknown";
+	// The agent decides which model serves the turn. The Pi asks for an answer;
+	// which model produces it is an implementation detail of this server.
+	const model = cfg.model ?? body.model ?? "unknown";
 	const toolsRun: string[] = [];
 	let bytes = 0;
 	let toolGapMs: number | undefined;
@@ -103,6 +128,7 @@ export async function runTurn(
 		const last = round === cfg.maxToolRounds;
 		const payload: Record<string, unknown> = {
 			...body,
+			model,
 			messages,
 			stream: true,
 		};
@@ -117,8 +143,10 @@ export async function runTurn(
 		const { response, abort } = upstream;
 
 		if (!response.ok || response.body === null) {
+			const detail =
+				response.body === null ? "" : await response.text().catch(() => "");
 			abort();
-			throw new Error(`upstream returned ${response.status}`);
+			throw new UpstreamError(response.status, detail);
 		}
 
 		const parser = new SseParser();

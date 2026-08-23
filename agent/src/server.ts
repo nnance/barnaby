@@ -23,7 +23,7 @@ import {
 	type ServerResponse,
 	type Server,
 } from "node:http";
-import { runTurn, type AgentRequest } from "./agent.ts";
+import { runTurn, UpstreamError, type AgentRequest } from "./agent.ts";
 import type { Config } from "./config.ts";
 import * as log from "./log.ts";
 import { buildRegistry } from "./tools/registry.ts";
@@ -276,14 +276,26 @@ async function agentStream(
 	began: number,
 	messages: number | undefined,
 ): Promise<void> {
-	res.writeHead(200, {
-		"content-type": "text/event-stream; charset=utf-8",
-		"cache-control": "no-cache, no-transform",
-		connection: "keep-alive",
-		"content-encoding": "identity",
-		"x-accel-buffering": "no",
-	});
-	res.flushHeaders();
+	// Headers are NOT sent yet, deliberately.
+	//
+	// A turn can fail before it speaks a word — upstream down, or the wrong
+	// model id, which returns 404. Committing to 200 up front makes that
+	// unreportable: the Pi gets an empty stream, raise_for_status() sees
+	// success, and Barnaby says nothing at all with no fault to show. So the
+	// status stays open until there is something to send.
+	let headersSent = false;
+	const startStream = (): void => {
+		if (headersSent) return;
+		headersSent = true;
+		res.writeHead(200, {
+			"content-type": "text/event-stream; charset=utf-8",
+			"cache-control": "no-cache, no-transform",
+			connection: "keep-alive",
+			"content-encoding": "identity",
+			"x-accel-buffering": "no",
+		});
+		res.flushHeaders();
+	};
 
 	const controller = new AbortController();
 	let aborted = false;
@@ -298,6 +310,7 @@ async function agentStream(
 	// Same race as the passthrough path: a destroyed stream never drains.
 	const write = async (bytes: Uint8Array): Promise<void> => {
 		if (aborted || res.writableEnded || res.destroyed) return;
+		startStream();
 		if (!res.write(bytes)) {
 			await new Promise<void>((resolve) => {
 				const done = (): void => {
@@ -315,15 +328,22 @@ async function agentStream(
 
 	let result: Awaited<ReturnType<typeof runTurn>> | undefined;
 	let failed: string | undefined;
+	let failedStatus: number | undefined;
 	try {
 		result = await runTurn(cfg, parsedBody, registry, write, controller.signal);
 	} catch (err) {
 		failed = err instanceof Error ? err.message : String(err);
+		if (err instanceof UpstreamError) failedStatus = err.status;
 		log.error("agent turn failed", err);
 	} finally {
-		// [DONE] is written here and nowhere else. The Pi's read loop breaks on
-		// it; without it the turn hangs to its 60 s timeout.
-		if (!aborted && !res.writableEnded && !res.destroyed) {
+		if (failed !== undefined && !headersSent && !aborted && !res.destroyed) {
+			// Nothing was spoken, so the status is still ours to set. Report the
+			// real failure and let the Pi fault properly.
+			const status = failedStatus ?? 502;
+			sendError(res, status >= 400 && status < 600 ? status : 502, failed);
+		} else if (!aborted && !res.writableEnded && !res.destroyed) {
+			// [DONE] is written here and nowhere else. The Pi's read loop breaks
+			// on it; without it the turn hangs to its 60 s timeout.
 			await write(new TextEncoder().encode("data: [DONE]\n\n"));
 			res.end();
 		}
@@ -334,7 +354,7 @@ async function agentStream(
 
 	log.turn({
 		route: "chat",
-		status: 200,
+		status: failed !== undefined && !headersSent ? (failedStatus ?? 502) : 200,
 		messages,
 		stream: true,
 		totalMs: Date.now() - began,

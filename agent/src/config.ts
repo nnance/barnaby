@@ -24,6 +24,16 @@ export interface Config {
 	 */
 	weather?: WeatherConfig | undefined;
 	/**
+	 * The model to ask for, overriding whatever the caller sent.
+	 *
+	 * The agent owns this, not the Pi. Tools only work with a model that calls
+	 * them reliably, so the tool layer and the model choice are one decision —
+	 * and splitting them across two machines means a model swap needs edits in
+	 * two places, where missing one leaves every turn failing. Undefined passes
+	 * the caller's model through unchanged, which is phase 1's behaviour.
+	 */
+	model?: string | undefined;
+	/**
 	 * How many tool rounds one turn may take before the loop gives up and lets
 	 * the model answer with what it has. A ceiling, not a target: each round is
 	 * a full inference, so this is the difference between a slow answer and a
@@ -50,6 +60,7 @@ export function load(): Config {
 			process.env.BARNABY_UPSTREAM_URL ?? "http://127.0.0.1:8001/v1"
 		).replace(/\/$/, ""),
 		timeoutMs: int("BARNABY_UPSTREAM_TIMEOUT_MS", 55_000),
+		model: process.env.BARNABY_MODEL,
 		weather: weatherFromEnv(),
 		maxToolRounds: int("BARNABY_MAX_TOOL_ROUNDS", 3),
 	};

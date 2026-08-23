@@ -49,6 +49,9 @@ All optional. The defaults assume this server and rapid-mlx on the same Mac.
 | `BARNABY_AGENT_HOST` | `0.0.0.0` | The Pi is a different machine — the same trap rapid-mlx has |
 | `BARNABY_UPSTREAM_URL` | `http://127.0.0.1:8001/v1` | Set this when developing off-Studio |
 | `BARNABY_UPSTREAM_TIMEOUT_MS` | `55000` | Under the Pi's 60 s, so we fail first and say why |
+| `BARNABY_MODEL` | *(caller's)* | **The agent picks the model, not the Pi.** Tools only work with a model that calls them reliably, so the tool layer and the model choice are one decision. Unset passes the caller's model through, which is phase 1 behaviour |
+| `BARNABY_LATITUDE` / `BARNABY_LONGITUDE` | *(none)* | Where "the weather" means. Both must be set or the tool is not offered at all and the gateway is a plain passthrough |
+| `BARNABY_PLACE` | `home` | Named only so an answer can say where it is talking about |
 
 ## Routes
 
@@ -113,4 +116,5 @@ delay is between the gateway and the Pi, not in the model.
 | Abort must listen on `res`, not `req` | `req` emits `close` as soon as the request body is read — *before* the first token. Hooking it there fires on every healthy turn and never on a real disconnect, so upstream keeps generating into a dead socket. `res` closes only when the socket actually goes away |
 | `127.0.0.1` is wrong off-Studio | The default assumes this runs on the Studio beside rapid-mlx. Developing on another Mac, set `BARNABY_UPSTREAM_URL` or every request 502s with `ECONNREFUSED` while `curl` to the hostname works fine |
 | rapid-mlx sends `: keepalive` comment frames | Not `data:` lines. The Pi's `startswith("data: ")` filter ignores them correctly; anything that parses this stream in phase 2 must too |
+| No `enum`, `namespace`, or constructor parameter properties | Node strips types rather than compiling them, so anything that *emits* code is rejected at runtime — and **`tsc --noEmit` does not catch it**. `readonly status: number` as a constructor parameter looks fine to `tsc` and dies under `node`. Write plain fields and assign in the body. `pnpm test` is the check that matters |
 | Errors are not streamed | A failure returns a non-streaming JSON 4xx/5xx on purpose. `httpx.raise_for_status()` turns that into a clean fault; an empty 200 stream looks like a model with nothing to say |

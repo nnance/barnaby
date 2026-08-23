@@ -260,6 +260,123 @@ describe("agent loop with a tool", () => {
 	});
 });
 
+describe("the agent owns the model choice", () => {
+	it("substitutes its own model, ignoring what the caller asked for", async () => {
+		// Tools only work with a model that calls them reliably, so the tool
+		// layer and the model choice are one decision. Splitting them across
+		// two machines means a swap needs edits in two places — and missing one
+		// leaves every turn failing.
+		const model = fakeModel({});
+		const mport = await listen(model.server);
+		const gateway = createAgentServer({
+			...cfgFor(mport),
+			model: "the-model-the-agent-chose",
+			weather: {
+				latitude: 1,
+				longitude: 2,
+				place: "the house",
+				unit: "fahrenheit",
+			},
+		});
+		const port = await listen(gateway);
+		try {
+			await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					model: "whatever-the-pi-still-sends",
+					messages: [{ role: "user", content: "hi" }],
+					stream: true,
+				}),
+			}).then((r) => r.text());
+			const sent = model.bodies.at(-1) ?? "";
+			assert.match(sent, /the-model-the-agent-chose/);
+			assert.doesNotMatch(
+				sent,
+				/whatever-the-pi-still-sends/,
+				"the caller's model reached upstream",
+			);
+		} finally {
+			await new Promise<void>((r) => gateway.close(() => r()));
+			await new Promise<void>((r) => model.server.close(() => r()));
+		}
+	});
+});
+
+describe("a turn that fails before speaking", () => {
+	it("returns a real status, not an empty 200 stream", async () => {
+		// The silent failure. Committing to 200 before the first byte makes an
+		// early error unreportable: the Pi sees success, gets nothing, and
+		// Barnaby says nothing with no fault to show. Seen live when the model
+		// id was wrong and upstream answered 404.
+		const upstream = createServer((_req, res) => {
+			res.writeHead(404, { "content-type": "application/json" });
+			res.end(JSON.stringify({ error: { message: "model does not exist" } }));
+		});
+		const uport = await listen(upstream);
+		const gateway = createAgentServer({
+			...cfgFor(uport),
+			weather: {
+				latitude: 1,
+				longitude: 2,
+				place: "the house",
+				unit: "fahrenheit",
+			},
+		});
+		const port = await listen(gateway);
+		try {
+			const response = await fetch(
+				`http://127.0.0.1:${port}/v1/chat/completions`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ messages: [], stream: true }),
+				},
+			);
+			// raise_for_status() must have something to raise on.
+			assert.equal(
+				response.status,
+				404,
+				"an early failure was reported as success",
+			);
+			assert.doesNotMatch(
+				response.headers.get("content-type") ?? "",
+				/event-stream/,
+				"headers were committed before there was anything to send",
+			);
+		} finally {
+			await new Promise<void>((r) => gateway.close(() => r()));
+			await new Promise<void>((r) => upstream.close(() => r()));
+		}
+	});
+
+	it("still ends the stream properly when it fails mid-answer", async () => {
+		// Once bytes are out the status is spent, so the only correct move is
+		// to terminate cleanly rather than hang.
+		const model = fakeModel({});
+		const mport = await listen(model.server);
+		const gateway = createAgentServer({
+			...cfgFor(mport),
+			weather: {
+				latitude: 1,
+				longitude: 2,
+				place: "the house",
+				unit: "fahrenheit",
+			},
+		});
+		const port = await listen(gateway);
+		try {
+			const { doneCount } = await collect(
+				`http://127.0.0.1:${port}/v1/chat/completions`,
+			);
+			assert.equal(doneCount, 1);
+		} finally {
+			await new Promise<void>((r) => gateway.close(() => r()));
+			await new Promise<void>((r) => model.server.close(() => r()));
+		}
+	});
+});
+
 describe("agent loop failure handling", () => {
 	it("still answers when the model keeps asking for tools", async () => {
 		// The runaway case: never let it spin, and never end on silence.
