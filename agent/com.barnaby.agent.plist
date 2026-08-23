@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs the agent server on the Mac Studio as a LaunchAgent.
+
+  A LaunchAgent, not a LaunchDaemon, for the same reason the Pi uses a systemd
+  *user* unit: it needs no root, and phase 2's tools will read the logged-in
+  user's files and mail. A daemon runs as root with no access to any of that,
+  which defeats the point of moving the agent loop to the Mac.
+
+  Install:
+    cp com.barnaby.agent.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.barnaby.agent.plist
+  Restart after a change:
+    launchctl kickstart -k gui/$(id -u)/com.barnaby.agent
+  Logs:
+    tail -f /tmp/barnaby-agent.log
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.barnaby.agent</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<!-- Absolute paths: launchd does not read your shell profile, so a
+		     version-managed `node` on PATH will not be found. `which node`. -->
+		<string>/usr/local/bin/node</string>
+		<string>/Users/CHANGEME/Developer/robots/barnaby/agent/src/main.ts</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>/Users/CHANGEME/Developer/robots/barnaby/agent</string>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- Same machine as rapid-mlx, so loopback. -->
+		<key>BARNABY_UPSTREAM_URL</key>
+		<string>http://127.0.0.1:8001/v1</string>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>StandardOutPath</key>
+	<string>/tmp/barnaby-agent.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/barnaby-agent.log</string>
+</dict>
+</plist>

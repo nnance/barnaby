@@ -4,10 +4,30 @@
    proves the path — then test against the real kitchen, TV on, extractor
    running. Retune `preroll_ms` at the same time; too much of it and the wake
    phrase lands in the transcript.
-2. **The Node agent server on the Mac.** Stand it up as a pure passthrough
-   first, on its own port, so the Pi change is one line — point `llm_url` at it
-   and leave ASR and TTS talking to rapid-mlx directly, off the critical path.
-   Get that boring before adding anything.
+2. **The Node agent server on the Mac. Phase 1 built 2026-08-22 — needs
+   deploying to the Studio and one Pi-side test.** Lives in `agent/`, zero
+   runtime dependencies, no build step. Passthrough on :8100, 18 tests green.
+   Body forwarding is byte-identical, verified against a real interception, so
+   `chat_template_kwargs` survives.
+
+   Measured from a **Mac mini**, so including a network hop the real
+   deployment will not have: median TTFT 425 ms at 40.5 tok/s, gateway
+   overhead in the noise (-9 ms and +7 ms on two A/B runs against direct
+   rapid-mlx). Not comparable to the Pi's 640 ms median in item 5 — different
+   machine, different path, no wake word or VAD in front of it.
+
+   What is left:
+   - **Run it on the Studio**, where upstream is loopback rather than a network
+     hop — `agent/com.barnaby.agent.plist`, a LaunchAgent not a daemon, because
+     phase 2's tools need the logged-in user's files.
+   - **Point `llm_url` at :8100** and confirm `--latency` medians on the Pi do
+     not move. That is the acceptance gate; a TTFT regression means buffering.
+     Compare against the recorded spread, not a single turn — item 5 is exactly
+     the trap of reading one fast turn as a change.
+   - **Do not change the model in the same step** — see item 5. Two changes at
+     once makes any regression unattributable.
+
+   Original notes, still true:
    - **Streaming is the thing that will silently break.** Sentence-pipelined
      TTS depends on token-level SSE — `delta.content` chunks then `[DONE]`. Any
      buffering middleware (compression especially) turns time-to-first-audio
@@ -41,9 +61,25 @@
    turns, spread 345-760. An earlier single turn read 357 ms and was briefly
    believed to be an improvement; it was just the fast end of the spread, so
    there is nothing to explain and nothing has regressed. Still worth
-   confirming `--no-think` is actually in effect. 8-bit is interesting for
-   tool-call reliability rather than latency — total first audio is 1608 ms
-   against a 2000 ms budget, so the headroom is thinner than it looked.
+   confirming `--no-think` is actually in effect — though note the server
+   reports `reasoning_parser: null` and `default_reasoning_level: "none"`, so
+   thinking may already be off independently of the flag.
+
+   **8-bit is not the swap it looks like, and the thin headroom makes that
+   worse.** There is no drop-in 8-bit MTP build: today's model is
+   `Qwen3.8-27B-4bit-MTP-MLX` and `mlx-community/Qwen3.8-27B-MTP-8bit` is
+   451 MB — the MTP **draft head**, not a servable model. Real 8-bit is 29.5 GB
+   and non-MTP, so the upgrade costs **+13.4 GB resident and speculative
+   decoding at the same time**, two reasons to expect TTFT to get *worse*. With
+   total first audio at 1608 ms against a 2000 ms budget there is not much to
+   give away.
+
+   So do it for tool-call reliability, as the first step of item 3, where it
+   has a real number to move — and serve it on 8003 **alongside** 4-bit rather
+   than replacing it. The gateway is already the routing seam, so trying it
+   costs no Pi change and reverting is deleting a route.
+   `agent/MODEL-NOTES.md` has the sizes and the procedure; `agent/bench.mjs`
+   runs the comparison.
 6. **Camera + face tracking** when the Wide arrives — emits `look` on the face
    channel, which the renderer already consumes.
 7. **ESP32 firmware.**

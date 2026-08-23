@@ -1,0 +1,116 @@
+# `agent/` — the Node agent server
+
+Sits between the Pi and rapid-mlx on the Mac Studio. Phase 1 is a passthrough
+and its whole job is to be invisible. Tool calling lands here in phase 2.
+
+See `PLAN.md` for why it exists and what phase 2 looks like.
+
+## Rolling back, first, because you will want it
+
+This server is on the LLM leg only. ASR and TTS talk to rapid-mlx directly and
+are unaffected, so a broken agent server can never cost you the microphone.
+
+To revert, put `llm_url` back and restart the Pi:
+
+```yaml
+# orchestrator/config.yaml
+llm_url: http://nicks-mac-studio.local:8001/v1   # was :8100/v1
+```
+
+You will restart this thing constantly while developing, and "Barnaby went
+mute" gets old.
+
+## Running it
+
+Needs Node 23+ for native TypeScript type stripping — there is **no build
+step**. Node 24.10 is what this was written against.
+
+```bash
+pnpm install     # dev dependencies only; nothing ships at runtime
+pnpm start       # or: pnpm dev, which restarts on change
+```
+
+Then point the Pi at it:
+
+```yaml
+# orchestrator/config.yaml
+llm_url: http://nicks-mac-studio.local:8100/v1
+```
+
+`asr_url` and `tts_url` stay on 8000 and 8002. Only the LLM leg moves.
+
+## Configuration
+
+All optional. The defaults assume this server and rapid-mlx on the same Mac.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `BARNABY_AGENT_PORT` | `8100` | Clear of the 8000-8002 rapid-mlx block |
+| `BARNABY_AGENT_HOST` | `0.0.0.0` | The Pi is a different machine — the same trap rapid-mlx has |
+| `BARNABY_UPSTREAM_URL` | `http://127.0.0.1:8001/v1` | Set this when developing off-Studio |
+| `BARNABY_UPSTREAM_TIMEOUT_MS` | `55000` | Under the Pi's 60 s, so we fail first and say why |
+
+## Routes
+
+| Route | Who calls it |
+|---|---|
+| `POST /v1/chat/completions` | The Pi, every turn. Streams SSE |
+| `GET /v1/models` | `python -m barnaby --check`. Proxied, not faked — a made-up list would make `--check` pass with the model missing |
+| `GET /healthz` | You. Upstream reachability and uptime |
+
+## Checking it
+
+```bash
+pnpm check    # tsc --noEmit; the runtime strips types without checking them
+pnpm test     # 14 tests against a fake rapid-mlx
+pnpm lint
+```
+
+The load-bearing test is **`streams incrementally`**. Every other test in the
+file would still pass on a gateway that buffered the whole answer and flushed
+it at the end — and that gateway would quietly destroy time-to-first-audio
+while looking perfectly correct.
+
+By hand, against the real thing:
+
+```bash
+curl -sN http://localhost:8100/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"qwen3.8-27b-4bit","messages":[{"role":"user","content":"hello"}],"stream":true}'
+```
+
+Watch it, do not just capture it. Frames must appear one at a time. If the
+whole answer lands at once, something is buffering and TTFT is gone.
+
+## What breaks silently
+
+1. **Buffering.** Sentence-pipelined TTS depends on token-level SSE arriving as
+   tokens. Any compression or buffering middleware turns time-to-first-audio
+   into full-response latency, and the answer is still correct — just late. The
+   response sets `no-transform`, `identity` and `x-accel-buffering: no`, and
+   never introduces middleware. Do not add compression to this server.
+2. **Dropping `chat_template_kwargs`.** The request body is forwarded as bytes
+   and never re-serialised, so `enable_thinking: false` survives and
+   `--no-think` holds. Verified byte-for-byte in the tests.
+3. **Swallowing `[DONE]`.** The Pi's read loop breaks on it; without it the
+   turn hangs to the 60 s timeout. Phase 1 never parses the stream, so it
+   cannot lose it.
+
+## Log lines
+
+One per request. `ttft` is measured here at the gateway, which makes it the
+buffering canary: if this says 350 ms and the Pi's `--latency` says 900 ms, the
+delay is between the gateway and the Pi, not in the model.
+
+```
+19:50:53.139 chat 200 msgs=3 stream=true ttft=421ms total=1233ms bytes=8214
+```
+
+## Gotchas found the hard way
+
+| Thing | Detail |
+|---|---|
+| Abort must listen on `res`, not `req` | `req` emits `close` as soon as the request body is read — *before* the first token. Hooking it there fires on every healthy turn and never on a real disconnect, so upstream keeps generating into a dead socket. `res` closes only when the socket actually goes away |
+| `127.0.0.1` is wrong off-Studio | The default assumes this runs on the Studio beside rapid-mlx. Developing on another Mac, set `BARNABY_UPSTREAM_URL` or every request 502s with `ECONNREFUSED` while `curl` to the hostname works fine |
+| rapid-mlx sends `: keepalive` comment frames | Not `data:` lines. The Pi's `startswith("data: ")` filter ignores them correctly; anything that parses this stream in phase 2 must too |
+| Errors are not streamed | A failure returns a non-streaming JSON 4xx/5xx on purpose. `httpx.raise_for_status()` turns that into a clean fault; an empty 200 stream looks like a model with nothing to say |

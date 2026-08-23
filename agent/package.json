@@ -1,0 +1,28 @@
+{
+	"name": "barnaby-agent",
+	"version": "0.1.0",
+	"description": "Gateway between the Pi and rapid-mlx on the Mac Studio. Tool calling lives here later.",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"start": "node src/main.ts",
+		"dev": "node --watch src/main.ts",
+		"check": "tsc --noEmit",
+		"lint": "biome lint",
+		"lint:fix": "biome lint --fix",
+		"format": "biome format --write",
+		"test": "node --test test/*.test.ts"
+	},
+	"devEngines": {
+		"packageManager": {
+			"name": "pnpm",
+			"version": "^11.6.0",
+			"onFail": "download"
+		}
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.9",
+		"@types/node": "^26.2.0",
+		"typescript": "^7.0.2"
+	}
+}

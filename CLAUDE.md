@@ -83,6 +83,13 @@ Runs on a laptop until the panel arrives: `pnpm dev`, then
 `http://localhost:5273/?ws=ws://barnaby.local:8711/face`. The `?ws=` override is
 required — the default derives the socket host from whoever served the page.
 
+**`agent/`** — TypeScript on the Mac Studio, **zero runtime dependencies**.
+The gateway between the Pi and rapid-mlx, and the future home of tool calling.
+Node 23+ strips types natively, so there is **no build step**: `pnpm start`
+runs `src/main.ts` directly. `src/server.ts` routes + SSE plumbing ·
+`src/upstream.ts` the only place an upstream URL is built · `bench.mjs` TTFT and
+tok/s against any model · `PLAN.md` phases · `MODEL-NOTES.md` the 8-bit question.
+
 **Design docs** — `parts-audit.md`, `pi-setup-guide.md`, `wiring-guide.md`,
 `robot-form-study.html` (interactive 3D form + expression study).
 
@@ -307,6 +314,9 @@ identity, ESP32, CAD.
 | The journal is volatile | `/var/log/journal` does not exist, so `Storage=auto` keeps everything in `/run` and a reboot loses it. `sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal` fixes it, and needs a password |
 | Deploying to the Pi | `./deploy.sh` — rsyncs and restarts the service. It is a **user** unit, so `systemctl --user`, never sudo (`admin` needs a password for sudo, which is why it is not a system unit). `journalctl --user-unit barnaby -f` for the log |
 | `HA_TOKEN` | Put it in `~/barnaby/barnaby.env`, read by the unit's `EnvironmentFile`. A shell `export` does not survive a reboot, and unset silently disables tier 0 rather than erroring |
+| Agent server abort must hook `res`, not `req` | `req` emits `close` as soon as the request body is read — *before* the first token — so hooking it there fires on every healthy turn and never on a real disconnect, and rapid-mlx keeps generating into a dead socket. `res` closes only when the socket actually goes |
+| There is no drop-in 8-bit MTP model | `mlx-community/Qwen3.8-27B-MTP-8bit` is 451 MB — the MTP **draft head**, not a model. Real 8-bit is 29.5 GB and non-MTP, so upgrading costs +13.4 GB *and* speculative decoding at once. See `agent/MODEL-NOTES.md` |
+| Thinking is already off server-side | `reasoning_parser: null`, `default_reasoning_level: "none"`. So a dropped `chat_template_kwargs` would **not** show up as `<think>` tags — behaviour cannot detect that regression, only a byte-level assertion on the forwarded body can |
 | face `check-fit` was unrunnable | `package.json` pointed at `scripts/check-fit.ts`; the file is `src/check-fit.ts`. Fixed 2026-08-22 and wired into `build`, so the geometry regression actually gates it now |
 
 ---
