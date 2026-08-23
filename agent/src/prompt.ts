@@ -9,7 +9,6 @@
  * a service restart on the robot.
  */
 
-import type { PersonalContext } from "./context.ts";
 import type { Message } from "./agent.ts";
 
 /**
@@ -30,9 +29,9 @@ Never read out personal information unless you have been told who is asking.`;
  * Personal context goes after the base so it can qualify it, and under a
  * heading so the model can tell "who I am" from "what I know about them".
  */
-export function systemPrompt(context: PersonalContext): string {
-	if (context.prose === "") return BASE;
-	return `${BASE}\n\nAbout the household you live with:\n\n${context.prose}`;
+export function systemPrompt(context: string): string {
+	if (context === "") return BASE;
+	return `${BASE}\n\nAbout the household you live with:\n\n${context}`;
 }
 
 /**
@@ -45,7 +44,7 @@ export function systemPrompt(context: PersonalContext): string {
  */
 export function withSystemPrompt(
 	messages: Message[],
-	context: PersonalContext,
+	context: string,
 ): Message[] {
 	const rest = messages.filter((m) => m.role !== "system");
 	return [{ role: "system", content: systemPrompt(context) }, ...rest];

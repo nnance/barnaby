@@ -31,7 +31,8 @@ function configFor(upstreamPort: number): Config {
 		upstream: `http://127.0.0.1:${upstreamPort}/v1`,
 		timeoutMs: 5_000,
 		maxToolRounds: 3,
-		context: { prose: "", fields: {} },
+		context: "",
+		weather: { unit: "fahrenheit" },
 	};
 }
 

@@ -110,7 +110,8 @@ function cfgFor(port: number): Config {
 		upstream: `http://127.0.0.1:${port}/v1`,
 		timeoutMs: 5_000,
 		maxToolRounds: 3,
-		context: { prose: "", fields: {} },
+		context: "",
+		weather: { unit: "fahrenheit" },
 	};
 }
 
@@ -158,7 +159,7 @@ describe("agent loop", () => {
 		// behave exactly like phase 1.
 		model = fakeModel({});
 		const mport = await listen(model.server);
-		gateway = createAgentServer({ ...cfgFor(mport), weather: undefined });
+		gateway = createAgentServer({ ...cfgFor(mport) });
 		port = await listen(gateway);
 	});
 
@@ -184,16 +185,15 @@ describe("agent loop with a tool", () => {
 	let port: number;
 
 	before(async () => {
-		model = fakeModel({ toolName: "get_forecast", args: '{"days":2}' });
+		model = fakeModel({
+			toolName: "get_forecast",
+			args: '{"latitude":1,"longitude":2,"days":2}',
+		});
 		const mport = await listen(model.server);
 		gateway = createAgentServer({
 			...cfgFor(mport),
-			weather: {
-				latitude: 1,
-				longitude: 2,
-				place: "the house",
-				unit: "fahrenheit",
-			},
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
 		});
 		port = await listen(gateway);
 	});
@@ -217,16 +217,15 @@ describe("agent loop with a tool", () => {
 	it("sends the tool result back on the second round", async () => {
 		// Its own model: the shared one's round counter has already advanced
 		// past the tool-asking phase.
-		const fresh = fakeModel({ toolName: "get_forecast", args: '{"days":2}' });
+		const fresh = fakeModel({
+			toolName: "get_forecast",
+			args: '{"latitude":1,"longitude":2,"days":2}',
+		});
 		const mport = await listen(fresh.server);
 		const gw = createAgentServer({
 			...cfgFor(mport),
-			weather: {
-				latitude: 1,
-				longitude: 2,
-				place: "the house",
-				unit: "fahrenheit",
-			},
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
 		});
 		const p = await listen(gw);
 		try {
@@ -272,12 +271,7 @@ describe("the agent owns the model choice", () => {
 		const gateway = createAgentServer({
 			...cfgFor(mport),
 			model: "the-model-the-agent-chose",
-			weather: {
-				latitude: 1,
-				longitude: 2,
-				place: "the house",
-				unit: "fahrenheit",
-			},
+			weather: { unit: "fahrenheit" },
 		});
 		const port = await listen(gateway);
 		try {
@@ -317,12 +311,8 @@ describe("a turn that fails before speaking", () => {
 		const uport = await listen(upstream);
 		const gateway = createAgentServer({
 			...cfgFor(uport),
-			weather: {
-				latitude: 1,
-				longitude: 2,
-				place: "the house",
-				unit: "fahrenheit",
-			},
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
 		});
 		const port = await listen(gateway);
 		try {
@@ -358,12 +348,8 @@ describe("a turn that fails before speaking", () => {
 		const mport = await listen(model.server);
 		const gateway = createAgentServer({
 			...cfgFor(mport),
-			weather: {
-				latitude: 1,
-				longitude: 2,
-				place: "the house",
-				unit: "fahrenheit",
-			},
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
 		});
 		const port = await listen(gateway);
 		try {
@@ -390,12 +376,8 @@ describe("agent loop failure handling", () => {
 		const gateway = createAgentServer({
 			...cfgFor(mport),
 			maxToolRounds: 2,
-			weather: {
-				latitude: 1,
-				longitude: 2,
-				place: "the house",
-				unit: "fahrenheit",
-			},
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
 		});
 		const port = await listen(gateway);
 		try {
@@ -416,18 +398,14 @@ describe("agent loop failure handling", () => {
 		const model = fakeModel({
 			promiseFirst: true,
 			toolName: "get_forecast",
-			args: '{"days":1}',
+			args: '{"latitude":1,"longitude":2,"days":1}',
 		});
 		const mport = await listen(model.server);
 		const gateway = createAgentServer({
 			...cfgFor(mport),
 			maxToolRounds: 4,
-			weather: {
-				latitude: 1,
-				longitude: 2,
-				place: "the house",
-				unit: "fahrenheit",
-			},
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
 		});
 		const port = await listen(gateway);
 		try {
@@ -458,12 +436,8 @@ describe("agent loop failure handling", () => {
 		const mport = await listen(model.server);
 		const gateway = createAgentServer({
 			...cfgFor(mport),
-			weather: {
-				latitude: 1,
-				longitude: 2,
-				place: "the house",
-				unit: "fahrenheit",
-			},
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
 		});
 		const port = await listen(gateway);
 		try {

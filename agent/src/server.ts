@@ -99,12 +99,17 @@ async function chatCompletions(
 		return;
 	}
 
-	// With tools configured, the agent loop takes over: it may run several
-	// upstream rounds and re-frames what it forwards. Without them, fall
-	// through to phase 1's byte-for-byte pipe, which is strictly cheaper and
-	// cannot lose framing — there is no reason to parse a stream nobody
-	// needs parsed.
-	if (registry.size > 0 && stream) {
+	// The agent path takes over whenever this server has an opinion about the
+	// turn — tools to offer, a model to substitute, or a context to put in the
+	// system prompt. Otherwise fall through to phase 1's byte-for-byte pipe,
+	// which is strictly cheaper and cannot lose framing: there is no reason to
+	// parse a stream nobody needs parsed.
+	//
+	// The passthrough cannot be the one to override the model, because it
+	// forwards the request bytes unmodified — that is its whole guarantee.
+	const agentOwnsTurn =
+		registry.size > 0 || cfg.model !== undefined || cfg.context !== "";
+	if (agentOwnsTurn && stream) {
 		await agentStream(cfg, registry, parsedBody, res, began, messages);
 		return;
 	}

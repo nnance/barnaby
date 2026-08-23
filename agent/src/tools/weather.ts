@@ -81,10 +81,7 @@ interface Forecast {
 }
 
 export interface WeatherConfig {
-	latitude: number;
-	longitude: number;
-	/** Named only so an answer can say where it is talking about. */
-	place: string;
+	/** Default when the model does not say. Everything else comes per call. */
 	unit: "fahrenheit" | "celsius";
 }
 
@@ -96,12 +93,29 @@ export function weatherTool(cfg: WeatherConfig): Tool {
 		// "is it hot out?" does not look like a forecast question.
 		description:
 			"Get the daily weather forecast — conditions, high and low temperature, " +
-			"and chance of rain — for the next few days at the user's home. Use this " +
-			"for any question about weather, temperature, rain, snow, or what to wear, " +
-			"whether it is about today, tomorrow, or later this week.",
+			"and chance of rain — for the next few days at a location. Use this for " +
+			"any question about weather, temperature, rain, snow, or what to wear, " +
+			"whether it is about today, tomorrow, or later this week. Pass the " +
+			"coordinates of the household's home unless another place is named.",
 		parameters: {
 			type: "object",
 			properties: {
+				// The model fills these from its own context, where CONTEXT.md
+				// has put the household's coordinates. Measured 12/12 exact, so
+				// there is no second copy of the location to drift out of step.
+				latitude: {
+					type: "number",
+					description: "Latitude of the place being asked about.",
+				},
+				longitude: {
+					type: "number",
+					description: "Longitude of the place being asked about.",
+				},
+				place: {
+					type: "string",
+					description:
+						"What to call this place when speaking, for example the town name.",
+				},
 				days: {
 					type: "integer",
 					description:
@@ -111,20 +125,38 @@ export function weatherTool(cfg: WeatherConfig): Tool {
 					maximum: 7,
 				},
 			},
-			required: [],
+			required: ["latitude", "longitude"],
 		},
 		readOnly: true,
 
 		async run(args, signal): Promise<string> {
-			// The model supplies these, so treat them as untrusted: clamp
-			// rather than trust, and fall back when it sends nonsense.
+			// Everything here comes from the model, so nothing is trusted.
+			// Coordinates out of range mean it invented them; better to say so
+			// than to forecast the Gulf of Guinea.
+			const latitude = Number(args.latitude);
+			const longitude = Number(args.longitude);
+			if (
+				!Number.isFinite(latitude) ||
+				!Number.isFinite(longitude) ||
+				Math.abs(latitude) > 90 ||
+				Math.abs(longitude) > 180
+			) {
+				throw new Error(
+					"no valid coordinates were given for the place to forecast",
+				);
+			}
+			const place =
+				typeof args.place === "string" && args.place.trim() !== ""
+					? args.place.trim()
+					: "there";
+
 			const raw = Number(args.days);
 			const days = Number.isFinite(raw)
 				? Math.min(Math.max(Math.trunc(raw), 1), 7)
 				: 3;
 
 			const url =
-				`${ENDPOINT}?latitude=${cfg.latitude}&longitude=${cfg.longitude}` +
+				`${ENDPOINT}?latitude=${latitude}&longitude=${longitude}` +
 				"&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
 				`&temperature_unit=${cfg.unit}&timezone=auto&forecast_days=${days}`;
 
@@ -162,7 +194,7 @@ export function weatherTool(cfg: WeatherConfig): Tool {
 				return parts.join(" ").replace(/,$/, "");
 			});
 
-			return `Forecast for ${cfg.place}:\n${lines.join("\n")}`;
+			return `Forecast for ${place}:\n${lines.join("\n")}`;
 		},
 	};
 }

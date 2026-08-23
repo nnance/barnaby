@@ -6,7 +6,7 @@
  */
 
 import { join } from "node:path";
-import { loadContext, weatherFrom, type PersonalContext } from "./context.ts";
+import { loadContext } from "./context.ts";
 import type { WeatherConfig } from "./tools/weather.ts";
 
 export interface Config {
@@ -24,12 +24,13 @@ export interface Config {
 	 * Where "the weather" means. Undefined disables the tool entirely rather
 	 * than guessing — a forecast for the wrong place is worse than none.
 	 */
-	weather?: WeatherConfig | undefined;
+	weather: WeatherConfig;
 	/**
-	 * Who Barnaby is talking to and where they live, from CONTEXT.md. The
-	 * prose is appended to the system prompt; the frontmatter feeds tools.
+	 * Who Barnaby is talking to and where they live, from CONTEXT.md. Plain
+	 * prose, appended to the system prompt. Anything a tool needs is written
+	 * into a sentence and the model passes it as a tool argument.
 	 */
-	context: PersonalContext;
+	context: string;
 	/**
 	 * The model to ask for, overriding whatever the caller sent.
 	 *
@@ -75,29 +76,18 @@ export function load(): Config {
 		timeoutMs: int("BARNABY_UPSTREAM_TIMEOUT_MS", 55_000),
 		model: process.env.BARNABY_MODEL,
 		context,
-		// Env vars still win, so a deployment can override a checked-out
-		// CONTEXT.md without editing it.
-		weather: weatherFromEnv() ?? weatherFrom(context),
+		weather: weatherConfig(),
 		maxToolRounds: int("BARNABY_MAX_TOOL_ROUNDS", 3),
 	};
 }
 
 /**
- * Weather location, from the environment.
- *
- * Both coordinates must be present and numeric or the tool is not offered: a
- * half-configured location would silently forecast the Gulf of Guinea.
+ * The weather tool needs no location any more — the model supplies coordinates
+ * per call from CONTEXT.md. Only the unit is a deployment choice.
  */
-function weatherFromEnv(): WeatherConfig | undefined {
-	const lat = Number(process.env.BARNABY_LATITUDE);
-	const lon = Number(process.env.BARNABY_LONGITUDE);
-	if (!Number.isFinite(lat) || !Number.isFinite(lon)) return undefined;
-	const unit =
-		process.env.BARNABY_TEMP_UNIT === "celsius" ? "celsius" : "fahrenheit";
+function weatherConfig(): WeatherConfig {
 	return {
-		latitude: lat,
-		longitude: lon,
-		place: process.env.BARNABY_PLACE ?? "home",
-		unit,
+		unit:
+			process.env.BARNABY_TEMP_UNIT === "celsius" ? "celsius" : "fahrenheit",
 	};
 }

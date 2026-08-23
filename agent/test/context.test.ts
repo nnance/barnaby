@@ -1,5 +1,9 @@
 /**
  * CONTEXT.md — the household's details, which never reach the repo.
+ *
+ * It is plain prose on purpose. Anything a tool needs is written into a
+ * sentence and the model passes it as a tool argument, so there is no second
+ * machine-readable copy to drift out of step.
  */
 
 import assert from "node:assert/strict";
@@ -7,7 +11,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { loadContext, weatherFrom } from "../src/context.ts";
+import { loadContext } from "../src/context.ts";
 import { systemPrompt, withSystemPrompt } from "../src/prompt.ts";
 
 function write(text: string): string {
@@ -17,70 +21,21 @@ function write(text: string): string {
 	return path;
 }
 
-const SAMPLE = `---
-latitude: 35.22257
-longitude: -97.43948
-place: Norman
-units: fahrenheit
----
-
-You live in the kitchen of Nick and Rhonda's home in Norman, Oklahoma.
-`;
+const SAMPLE = `You live on the kitchen counter in Nick and Rhonda's home in
+Norman, Oklahoma, at latitude 35.22257 and longitude -97.43948.`;
 
 describe("loading personal context", () => {
-	it("splits frontmatter from prose", () => {
-		const ctx = loadContext(write(SAMPLE));
-		assert.equal(ctx.fields.place, "Norman");
-		assert.equal(ctx.fields.latitude, "35.22257");
-		assert.match(ctx.prose, /Nick and Rhonda/);
-		// The frontmatter is for tools; it must not be read aloud.
-		assert.doesNotMatch(ctx.prose, /latitude/);
+	it("reads the file as prose", () => {
+		const context = loadContext(write(SAMPLE));
+		assert.match(context, /Nick and Rhonda/);
+		// Coordinates stay in the prose, for the model to pass along.
+		assert.match(context, /35\.22257/);
 	});
 
 	it("treats a missing file as normal, not an error", () => {
 		// Barnaby works without one; he just knows nothing about the household.
-		const ctx = loadContext("/nonexistent/CONTEXT.md");
-		assert.equal(ctx.prose, "");
-		assert.deepEqual(ctx.fields, {});
-	});
-
-	it("accepts prose with no frontmatter at all", () => {
-		const ctx = loadContext(write("Just some facts about the house.\n"));
-		assert.match(ctx.prose, /Just some facts/);
-		assert.deepEqual(ctx.fields, {});
-	});
-
-	it("ignores comments and strips quotes", () => {
-		const ctx = loadContext(
-			write(
-				'---\n# a comment\nplace: "Norman"\nunits: fahrenheit  # trailing\n---\nhi\n',
-			),
-		);
-		assert.equal(ctx.fields.place, "Norman");
-		assert.equal(ctx.fields.units, "fahrenheit");
-	});
-});
-
-describe("weather location from context", () => {
-	it("reads coordinates as numbers", () => {
-		const weather = weatherFrom(loadContext(write(SAMPLE)));
-		assert.equal(weather?.latitude, 35.22257);
-		assert.equal(weather?.longitude, -97.43948);
-		assert.equal(weather?.place, "Norman");
-		assert.equal(weather?.unit, "fahrenheit");
-	});
-
-	it("refuses a half-specified location", () => {
-		// 0,0 is the Gulf of Guinea. Forecasting it silently is worse than
-		// offering no forecast at all.
-		assert.equal(
-			weatherFrom(loadContext(write("---\nlatitude: 35.2\n---\nhi"))),
-			undefined,
-		);
-		assert.equal(
-			weatherFrom(loadContext(write("---\nplace: Norman\n---\nhi"))),
-			undefined,
-		);
+		assert.equal(loadContext("/nonexistent/CONTEXT.md"), "");
+		assert.equal(loadContext(undefined), "");
 	});
 });
 
@@ -89,10 +44,11 @@ describe("the system prompt lives on the agent", () => {
 		const prompt = systemPrompt(loadContext(write(SAMPLE)));
 		assert.match(prompt, /You are Barnaby/);
 		assert.match(prompt, /Nick and Rhonda/);
+		assert.match(prompt, /35\.22257/, "coordinates never reached the model");
 	});
 
 	it("is just the base prompt when there is no context", () => {
-		const prompt = systemPrompt({ prose: "", fields: {} });
+		const prompt = systemPrompt("");
 		assert.match(prompt, /You are Barnaby/);
 		assert.doesNotMatch(prompt, /About the household/);
 	});
@@ -108,7 +64,6 @@ describe("the system prompt lives on the agent", () => {
 			loadContext(write(SAMPLE)),
 		);
 		assert.equal(messages.length, 2);
-		assert.equal(messages[0]?.role, "system");
 		assert.doesNotMatch(String(messages[0]?.content), /pirate/);
 		assert.match(String(messages[0]?.content), /Nick and Rhonda/);
 		assert.equal(messages[1]?.content, "hello");
@@ -121,7 +76,7 @@ describe("the system prompt lives on the agent", () => {
 				{ role: "assistant", content: "two" },
 				{ role: "user", content: "three" },
 			],
-			{ prose: "", fields: {} },
+			"",
 		);
 		assert.deepEqual(
 			messages.slice(1).map((m) => m.content),

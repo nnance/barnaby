@@ -51,12 +51,14 @@ after(async () => {
 
 /** Point the tool at the local fake by overriding global fetch for one call. */
 async function run(args: Record<string, unknown>): Promise<string> {
-	const tool = weatherTool({
-		latitude: 32.7767,
-		longitude: -96.797,
-		place: "the house",
-		unit: "fahrenheit",
-	});
+	// Coordinates now arrive as tool arguments, the way the model sends them.
+	const withPlace: Record<string, unknown> = {
+		latitude: 35.22257,
+		longitude: -97.43948,
+		place: "Norman",
+		...args,
+	};
+	const tool = weatherTool({ unit: "fahrenheit" });
 	const realFetch = globalThis.fetch;
 	globalThis.fetch = ((url: string | URL, init?: RequestInit) => {
 		const path = String(url).replace(
@@ -66,7 +68,7 @@ async function run(args: Record<string, unknown>): Promise<string> {
 		return realFetch(path, init);
 	}) as typeof fetch;
 	try {
-		return await tool.run(args, AbortSignal.timeout(5_000));
+		return await tool.run(withPlace, AbortSignal.timeout(5_000));
 	} finally {
 		globalThis.fetch = realFetch;
 	}
@@ -110,6 +112,27 @@ describe("weather tool", () => {
 		assert.match(lastUrl, /forecast_days=1/);
 		await run({ days: "banana" });
 		assert.match(lastUrl, /forecast_days=3/, "non-numeric did not fall back");
+	});
+
+	it("refuses coordinates the model invented", async () => {
+		// Everything here comes from the model, so nothing is trusted. Saying
+		// "I could not work out where" beats forecasting the Gulf of Guinea.
+		for (const bad of [
+			{ latitude: 999, longitude: -97 },
+			{ latitude: 35, longitude: 999 },
+			{ latitude: "somewhere", longitude: -97 },
+		]) {
+			await assert.rejects(
+				() => run(bad),
+				/coordinates/,
+				`accepted ${JSON.stringify(bad)}`,
+			);
+		}
+	});
+
+	it("speaks the place name the model supplied", async () => {
+		const text = await run({ place: "Norman", days: 1 });
+		assert.match(text, /Forecast for Norman/);
 	});
 
 	it("emits no markdown or symbols", async () => {

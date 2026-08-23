@@ -14,10 +14,13 @@ import { weatherTool } from "./weather.ts";
 export function buildRegistry(cfg: Config): Map<string, Tool> {
 	const tools: Tool[] = [];
 
-	// Weather needs a location. Without one configured there is no sensible
-	// default — a forecast for the wrong place is worse than no forecast — so
-	// the tool simply is not offered.
-	if (cfg.weather !== undefined) tools.push(weatherTool(cfg.weather));
+	// The weather tool carries no location of its own: the model passes
+	// coordinates as arguments, taking them from CONTEXT.md. So it needs a
+	// context to be useful, and without one it is not offered — the model
+	// would have nowhere to forecast and would either refuse or invent a
+	// place. No context also means no tools at all, which puts the gateway
+	// back on phase 1's byte-for-byte passthrough.
+	if (cfg.context.trim() !== "") tools.push(weatherTool(cfg.weather));
 
 	const registry = new Map<string, Tool>();
 	for (const tool of tools) registry.set(tool.name, tool);

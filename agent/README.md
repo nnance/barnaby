@@ -49,7 +49,8 @@ All optional. The defaults assume this server and rapid-mlx on the same Mac.
 | `BARNABY_AGENT_HOST` | `0.0.0.0` | The Pi is a different machine — the same trap rapid-mlx has |
 | `BARNABY_UPSTREAM_URL` | `http://127.0.0.1:8001/v1` | Set this when developing off-Studio |
 | `BARNABY_UPSTREAM_TIMEOUT_MS` | `55000` | Under the Pi's 60 s, so we fail first and say why |
-| `BARNABY_CONTEXT` | `agent/CONTEXT.md` | Personal context — see below. Missing is fine; he just knows nothing about the household |
+| `BARNABY_CONTEXT` | `agent/CONTEXT.md` | Personal context — see below. Missing is fine; he knows nothing about the household and offers no tools |
+| `BARNABY_TEMP_UNIT` | `fahrenheit` | `celsius` to switch |
 | `BARNABY_MODEL` | *(caller's)* | **The agent picks the model, not the Pi.** Tools only work with a model that calls them reliably, so the tool layer and the model choice are one decision. Unset passes the caller's model through, which is phase 1 behaviour |
 | `BARNABY_LATITUDE` / `BARNABY_LONGITUDE` | *(none)* | Where "the weather" means. Both must be set or the tool is not offered at all and the gateway is a plain passthrough |
 | `BARNABY_PLACE` | `home` | Named only so an answer can say where it is talking about |
@@ -67,22 +68,25 @@ Personal details live in **`agent/CONTEXT.md`, which is gitignored and must stay
 that way** — names and a home location to within a few hundred metres have no
 business in a public repo. `CONTEXT.example.md` is the committed template.
 
-```markdown
----
-latitude: 35.22257
-longitude: -97.43948
-place: Norman
-units: fahrenheit
----
+It is **plain prose, and nothing in it is parsed**:
 
-You live in the kitchen of Nick and Rhonda's home in Norman, Oklahoma.
+```markdown
+You live on the kitchen counter in Alex and Sam's home in Norman, Oklahoma, at
+latitude 35.22257 and longitude -97.43948. When either of them asks about the
+weather, they mean Norman.
 ```
 
-The prose is appended to the system prompt. The frontmatter is for tools that
-need numbers: a model reading a town name out of a paragraph and guessing
-coordinates is wrong in a way nobody notices until the forecast is for another
-town. Env vars still override it, so a deployment can point somewhere else
-without editing the file.
+That includes values tools need. The coordinates go in a sentence, the model
+reads them from its own context, and it passes them as tool arguments —
+measured 12/12 exact. So there is no frontmatter, no second machine-readable
+copy of the location, and nothing to drift out of step with the prose. Tools
+validate what arrives rather than trusting it: coordinates outside the real
+range are refused, because forecasting the Gulf of Guinea silently is worse
+than saying you could not work out where.
+
+**No context means no tools.** The weather tool carries no location of its own,
+so without a context the model would have nowhere to forecast; it is simply not
+offered, and the gateway falls back to phase 1's byte-for-byte passthrough.
 
 Keep the prose short — every word is sent on every turn.
 
