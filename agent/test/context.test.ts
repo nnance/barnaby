@@ -53,20 +53,58 @@ describe("the system prompt lives on the agent", () => {
 		assert.doesNotMatch(prompt, /About the household/);
 	});
 
-	it("replaces whatever system message the caller sent", () => {
-		// The Pi still sends one. It is a client of an agent now, so its prompt
-		// is ignored rather than merged — but it keeps working untouched.
+	it("appends the caller's prompt rather than dropping it", () => {
+		// The agent knows who Barnaby is; the caller knows how its answers are
+		// consumed. The Pi speaks through a speaker with no screen; a web chat
+		// would want markdown. The agent cannot know which, so it must not
+		// decide — it composes.
 		const messages = withSystemPrompt(
 			[
-				{ role: "system", content: "You are a pirate." },
+				{
+					role: "system",
+					content: "Your answers are spoken aloud. No markdown.",
+				},
 				{ role: "user", content: "hello" },
 			],
 			loadContext(write(SAMPLE)),
 		);
 		assert.equal(messages.length, 2);
-		assert.doesNotMatch(String(messages[0]?.content), /pirate/);
-		assert.match(String(messages[0]?.content), /Nick and Rhonda/);
+		const prompt = String(messages[0]?.content);
+		assert.match(prompt, /You are Barnaby/, "identity lost");
+		assert.match(prompt, /Nick and Rhonda/, "household context lost");
+		assert.match(prompt, /spoken aloud/, "the caller's guidance was dropped");
+		// The caller comes last so it can qualify what precedes it.
+		assert.ok(
+			prompt.indexOf("Nick and Rhonda") < prompt.indexOf("spoken aloud"),
+			"the caller's guidance should come last",
+		);
 		assert.equal(messages[1]?.content, "hello");
+	});
+
+	it("says nothing about how answers are delivered on its own", () => {
+		// The agent must not assume its caller is a speaker. A web chat calling
+		// the same agent should not be told to avoid markdown.
+		const prompt = systemPrompt(loadContext(write(SAMPLE)));
+		assert.doesNotMatch(
+			prompt,
+			/markdown/i,
+			"presentation guidance leaked into the agent",
+		);
+		assert.doesNotMatch(prompt, /spoken|aloud|speaker/i);
+		assert.doesNotMatch(prompt, /short sentences/i);
+	});
+
+	it("joins several system messages in order", () => {
+		const messages = withSystemPrompt(
+			[
+				{ role: "system", content: "First rule." },
+				{ role: "system", content: "Second rule." },
+				{ role: "user", content: "hi" },
+			],
+			"",
+		);
+		const prompt = String(messages[0]?.content);
+		assert.ok(prompt.indexOf("First rule.") < prompt.indexOf("Second rule."));
 	});
 
 	it("keeps the conversation in order", () => {

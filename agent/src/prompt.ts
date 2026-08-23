@@ -1,51 +1,70 @@
 /**
- * Barnaby's system prompt. It lives here, not on the Pi.
+ * Barnaby's system prompt, assembled from two halves.
  *
- * The Pi is a client of an agent: it sends what was said and plays what comes
- * back. Who Barnaby is, which model answers, and what tools exist are all
- * decisions of the intelligence layer, and this is the intelligence layer.
+ * The agent knows WHO he is: his name, the household he lives with, what he
+ * must not say. That is the same whoever is asking.
  *
- * Practical consequence: editing his personality no longer means an rsync and
- * a service restart on the robot.
+ * The client knows HOW its answers will be consumed. The Pi speaks them aloud
+ * through a speaker with no screen, so it wants no markdown, short answers, and
+ * numbers rounded the way people say them. A web chat would want the opposite —
+ * markdown renders, and length is cheap. **The agent cannot know which it is
+ * talking to**, so it must not decide: a caller's system message is presentation
+ * guidance, and it is appended rather than dropped.
+ *
+ * The split is worth stating precisely, because it is easy to get backwards:
+ *
+ *   agent  — identity, household context, safety. Facts about Barnaby.
+ *   client — medium, length, formatting. Facts about the channel.
  */
 
 import type { Message } from "./agent.ts";
 
 /**
- * The base prompt.
- *
- * Every line is about being SPOKEN. He has no screen to put a list on, and
- * markdown read aloud is gibberish.
+ * Who Barnaby is. Nothing here assumes anything about how the answer is
+ * delivered — no mention of speaking, markdown, or length, because a caller
+ * that renders markdown is just as valid as one that speaks.
  */
-const BASE = `You are Barnaby, a companion robot on a kitchen counter in a shared home.
+const IDENTITY = `You are Barnaby, a companion robot in a shared home.
 
-Answer in one or two short sentences. You are being spoken aloud, so never use markdown, lists, or symbols — write as you would speak. Say "degrees" rather than a degree sign, and write numbers as you would say them. Round them the way a person would out loud — "a hundred and nine", not "one hundred eight point nine". If you do not know something, say so plainly rather than guessing.
+If you do not know something, say so plainly rather than guessing.
 
 Never read out personal information unless you have been told who is asking.`;
 
 /**
  * Assemble the system message.
  *
- * Personal context goes after the base so it can qualify it, and under a
- * heading so the model can tell "who I am" from "what I know about them".
+ * Order is identity, then household, then the caller's presentation guidance.
+ * The caller comes last so it can qualify what came before — a client saying
+ * "one or two short sentences" should win over any general inclination.
  */
-export function systemPrompt(context: string): string {
-	if (context === "") return BASE;
-	return `${BASE}\n\nAbout the household you live with:\n\n${context}`;
+export function systemPrompt(context: string, clientPrompt = ""): string {
+	const parts = [IDENTITY];
+	if (context !== "")
+		parts.push(`About the household you live with:\n\n${context}`);
+	if (clientPrompt !== "") parts.push(clientPrompt);
+	return parts.join("\n\n");
 }
 
 /**
- * Put our system message at the front, dropping any the caller sent.
+ * Put the assembled system message at the front, folding in whatever the
+ * caller sent.
  *
- * The Pi still sends one today, and this ignores it rather than breaking it —
- * the Pi keeps working untouched while the prompt it sends stops mattering.
- * Same shape as the model override: the agent decides, the client need not
- * change.
+ * Multiple system messages are concatenated in order rather than the last one
+ * winning, since a caller that sends several means all of them.
  */
 export function withSystemPrompt(
 	messages: Message[],
 	context: string,
 ): Message[] {
+	const clientPrompt = messages
+		.filter((m) => m.role === "system")
+		.map((m) => (typeof m.content === "string" ? m.content.trim() : ""))
+		.filter((text) => text !== "")
+		.join("\n\n");
+
 	const rest = messages.filter((m) => m.role !== "system");
-	return [{ role: "system", content: systemPrompt(context) }, ...rest];
+	return [
+		{ role: "system", content: systemPrompt(context, clientPrompt) },
+		...rest,
+	];
 }

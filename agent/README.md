@@ -57,12 +57,25 @@ All optional. The defaults assume this server and rapid-mlx on the same Mac.
 
 ## Personal context, and where the system prompt lives
 
-**The Pi does not have a system prompt.** It is a client of an agent, not a
-caller of an LLM: it sends what was said and plays what comes back. Who Barnaby
-is, which model answers, what tools exist, and what he knows about the household
-are all decisions of the intelligence layer, and that is this server. The Pi
-still sends a system message today; it is dropped, so the Pi keeps working
-untouched while what it sends stops mattering.
+The system prompt is **assembled from two halves**, and the split matters:
+
+| The agent knows | The client knows |
+|---|---|
+| Who Barnaby is | That answers are spoken aloud |
+| The household (`CONTEXT.md`) | No markdown, no symbols |
+| Not to read out personal details | One or two short sentences |
+| Not to guess | How to say a number out loud |
+
+The left column is the same whoever is asking. The right column is a property
+of the **channel** — and the agent cannot know what its caller is. The Pi speaks
+through a speaker with no screen; a web chat renders markdown and does not care
+about length. So a caller's system message is presentation guidance and is
+**appended**, never dropped. It comes last, so it can qualify what precedes it.
+
+Verified against the live model: the same question, the same tool, the same
+forecast, sent by two clients — the Pi gets "a hundred and one degrees" in one
+sentence, and a web chat gets a markdown table with `101.3°F`. Both know they
+live with Nick and Rhonda.
 
 Personal details live in **`agent/CONTEXT.md`, which is gitignored and must stay
 that way** — names and a home location to within a few hundred metres have no

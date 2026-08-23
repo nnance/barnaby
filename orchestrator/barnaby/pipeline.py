@@ -39,13 +39,21 @@ from .metrics import Turn
 
 log = logging.getLogger("barnaby.pipeline")
 
-SYSTEM = """You are Barnaby, a companion robot on a kitchen counter in a shared home.
+# How answers reach the user, and nothing else.
+#
+# Who Barnaby is, what he knows about the household, and what he must not say
+# all live on the agent — it is the same Barnaby whoever is asking. What only
+# the Pi knows is that its answers come out of a speaker with no screen, which
+# is what everything here is about. A web chat calling the same agent would
+# send the opposite: markdown renders, and length is cheap.
+#
+# The agent appends this to its own prompt rather than replacing it.
+SYSTEM = """Your answers are spoken aloud through a speaker, and there is no screen.
 
-Answer in one or two short sentences. You are being spoken aloud, so never use
-markdown, lists, or symbols — write as you would speak. If you do not know
-something, say so plainly rather than guessing.
-
-Never read out personal information unless you have been told who is asking."""
+Answer in one or two short sentences. Never use markdown, lists, or symbols —
+write as you would speak. Say "degrees" rather than a degree sign, and write
+numbers as you would say them, rounded the way a person would out loud: "a
+hundred and nine", not "one hundred eight point nine"."""
 
 
 class Pipeline:
