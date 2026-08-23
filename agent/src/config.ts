@@ -5,6 +5,8 @@
  * Mac, so upstream is 127.0.0.1. Nothing here needs setting to run it.
  */
 
+import { join } from "node:path";
+import { loadContext, weatherFrom, type PersonalContext } from "./context.ts";
 import type { WeatherConfig } from "./tools/weather.ts";
 
 export interface Config {
@@ -23,6 +25,11 @@ export interface Config {
 	 * than guessing — a forecast for the wrong place is worse than none.
 	 */
 	weather?: WeatherConfig | undefined;
+	/**
+	 * Who Barnaby is talking to and where they live, from CONTEXT.md. The
+	 * prose is appended to the system prompt; the frontmatter feeds tools.
+	 */
+	context: PersonalContext;
 	/**
 	 * The model to ask for, overriding whatever the caller sent.
 	 *
@@ -53,6 +60,12 @@ function int(name: string, fallback: number): number {
 }
 
 export function load(): Config {
+	// Beside the source by default: it is the agent's file, not the repo's, and
+	// BARNABY_CONTEXT can point elsewhere.
+	const context = loadContext(
+		process.env.BARNABY_CONTEXT ??
+			join(import.meta.dirname, "..", "CONTEXT.md"),
+	);
 	return {
 		port: int("BARNABY_AGENT_PORT", 8100),
 		host: process.env.BARNABY_AGENT_HOST ?? "0.0.0.0",
@@ -61,7 +74,10 @@ export function load(): Config {
 		).replace(/\/$/, ""),
 		timeoutMs: int("BARNABY_UPSTREAM_TIMEOUT_MS", 55_000),
 		model: process.env.BARNABY_MODEL,
-		weather: weatherFromEnv(),
+		context,
+		// Env vars still win, so a deployment can override a checked-out
+		// CONTEXT.md without editing it.
+		weather: weatherFromEnv() ?? weatherFrom(context),
 		maxToolRounds: int("BARNABY_MAX_TOOL_ROUNDS", 3),
 	};
 }

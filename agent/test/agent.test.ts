@@ -110,6 +110,7 @@ function cfgFor(port: number): Config {
 		upstream: `http://127.0.0.1:${port}/v1`,
 		timeoutMs: 5_000,
 		maxToolRounds: 3,
+		context: { prose: "", fields: {} },
 	};
 }
 

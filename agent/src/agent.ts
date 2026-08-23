@@ -23,6 +23,7 @@ import * as log from "./log.ts";
 import { SseParser, ToolCallAccumulator } from "./sse.ts";
 import type { Tool, ToolSpec } from "./tools/types.ts";
 import { toSpec } from "./tools/types.ts";
+import { withSystemPrompt } from "./prompt.ts";
 import { post } from "./upstream.ts";
 
 export interface Message {
@@ -110,7 +111,9 @@ export async function runTurn(
 	emit: Emit,
 	signal: AbortSignal,
 ): Promise<AgentResult> {
-	const messages = [...body.messages];
+	// The agent owns the system prompt, same as it owns the model. Whatever the
+	// Pi sent is replaced: it is a client of an agent, not a caller of an LLM.
+	const messages = withSystemPrompt(body.messages, cfg.context);
 	const specs: ToolSpec[] = [...registry.values()].map(toSpec);
 	// The agent decides which model serves the turn. The Pi asks for an answer;
 	// which model produces it is an implementation detail of this server.
