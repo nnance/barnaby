@@ -8,7 +8,9 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { Server } from "node:http";
+import { connect } from "node:net";
 import { after, before, describe, it } from "node:test";
 import type { Config } from "../src/config.ts";
 import { createAgentServer } from "../src/server.ts";
@@ -168,7 +170,7 @@ describe("chat completions passthrough", () => {
 		);
 	});
 
-	it("passes tokens through byte for byte", async () => {
+	it("reassembles the tokens it was given", async () => {
 		const response = await fetch(
 			`http://127.0.0.1:${port}/v1/chat/completions`,
 			{
@@ -188,6 +190,44 @@ describe("chat completions passthrough", () => {
 			})
 			.join("");
 		assert.equal(text, "Hello there. All set.");
+	});
+
+	it("relays a real rapid-mlx stream byte for byte", async () => {
+		// The response-side counterpart to the request-body byte test.
+		//
+		// Reconstructing text from delta.content proves far less than it looks:
+		// a gateway that reformatted the JSON, dropped `: keepalive` comments,
+		// or swallowed the opening role-only delta would rebuild identical text
+		// and pass. Comparing the raw bytes against a stream captured from the
+		// real rapid-mlx is what actually pins the passthrough contract.
+		const captured = readFileSync(
+			new URL("./fixtures/real-stream.sse", import.meta.url),
+			"utf8",
+		);
+		const fake = await startFake({ raw: captured });
+		const gateway = createAgentServer(configFor(fake.port));
+		const port = await listen(gateway);
+		try {
+			const response = await fetch(
+				`http://127.0.0.1:${port}/v1/chat/completions`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ messages: [], stream: true }),
+				},
+			);
+			const relayed = await response.text();
+			assert.equal(relayed, captured);
+			// Belt and braces: the shapes a reconstructing test would lose.
+			assert.ok(relayed.includes(": keepalive"), "comment frame dropped");
+			assert.ok(
+				relayed.includes('"delta":{"role":"assistant"}'),
+				"role-only delta dropped",
+			);
+		} finally {
+			await new Promise<void>((resolve) => gateway.close(() => resolve()));
+			await fake.close();
+		}
 	});
 
 	it("proxies /v1/models, which --check health-checks", async () => {
@@ -287,6 +327,68 @@ describe("failure behaviour", () => {
 			);
 			assert.equal(response.status, 500);
 		} finally {
+			await new Promise<void>((resolve) => gateway.close(() => resolve()));
+			await fake.close();
+		}
+	});
+
+	it("finishes the turn when a stalled client dies during backpressure", async () => {
+		// The barge-in case the plain-abort test does not reach.
+		//
+		// A client that stops reading fills the socket buffer, so res.write()
+		// returns false and the loop waits for 'drain'. A destroyed stream
+		// never emits it, so waiting on 'drain' alone parks there forever: the
+		// loop never resumes, the finally never runs, the turn never logs, and
+		// the abort never reaches upstream — rapid-mlx generates for a client
+		// that is gone until the 55 s timeout.
+		//
+		// The assertion is that the gateway's own turn COMPLETES. Watching the
+		// upstream instead is unreliable: a fake that stops writing under
+		// backpressure sees its own socket close either way, so it reports the
+		// same thing whether or not the gateway recovered.
+		//
+		// A raw socket is required — fetch() drains in the background, so it
+		// cannot produce the backpressure this depends on.
+		const big = "x".repeat(200_000);
+		const fake = await startFake({ gapMs: 0, tokens: Array(200).fill(big) });
+		const gateway = createAgentServer(configFor(fake.port));
+
+		// The handler logs one line per turn as its final act, so the log is
+		// the signal that it ran to completion instead of parking forever.
+		const realLog = console.log;
+		let turnFinished = false;
+		console.log = (...args: unknown[]): void => {
+			if (args.join(" ").includes("chat 200")) turnFinished = true;
+		};
+
+		const port = await listen(gateway);
+		try {
+			const socket = connect(port, "127.0.0.1");
+			await new Promise<void>((resolve) => socket.once("connect", resolve));
+			const body = JSON.stringify({ messages: [], stream: true });
+			socket.write(
+				`POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n` +
+					`Content-Type: application/json\r\n` +
+					`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+			);
+			socket.pause(); // never read — this is what fills the buffer
+			await new Promise((r) => setTimeout(r, 700));
+			socket.destroy();
+			await new Promise((r) => setTimeout(r, 1_500));
+
+			// Cut off well short of all 200 frames, i.e. it did not quietly run
+			// the whole generation out after the client had gone.
+			assert.ok(
+				fake.framesSent < 200,
+				`upstream sent all ${fake.framesSent} frames after the client died`,
+			);
+			assert.equal(
+				turnFinished,
+				true,
+				"gateway never finished the turn — parked on a drain that never came",
+			);
+		} finally {
+			console.log = realLog;
 			await new Promise<void>((resolve) => gateway.close(() => resolve()));
 			await fake.close();
 		}

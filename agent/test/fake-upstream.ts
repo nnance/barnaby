@@ -16,6 +16,13 @@ export interface FakeOptions {
 	gapMs?: number;
 	/** Return this status instead of streaming. */
 	status?: number;
+	/**
+	 * Emit exactly these bytes instead of generating frames, so a test can
+	 * compare what the gateway produced against a known input byte for byte —
+	 * including SSE comments and role-only deltas, which reconstructing text
+	 * from `delta.content` would silently discard.
+	 */
+	raw?: string;
 }
 
 export interface Fake {
@@ -25,6 +32,8 @@ export interface Fake {
 	received: string[];
 	/** Set when the client aborted mid-stream. */
 	aborted: boolean;
+	/** Frames actually written. Short of `tokens.length` means it was cut off. */
+	framesSent: number;
 	close: () => Promise<void>;
 }
 
@@ -32,7 +41,7 @@ export async function startFake(opts: FakeOptions = {}): Promise<Fake> {
 	const tokens = opts.tokens ?? ["Hello", " there", ".", " All", " set", "."];
 	const gapMs = opts.gapMs ?? 25;
 	const received: string[] = [];
-	const state = { aborted: false };
+	const state = { aborted: false, framesSent: 0 };
 
 	const server = createServer((req, res) => {
 		if (req.url === "/v1/models") {
@@ -86,6 +95,11 @@ export async function startFake(opts: FakeOptions = {}): Promise<Fake> {
 				"cache-control": "no-cache",
 			});
 
+			if (opts.raw !== undefined) {
+				res.end(opts.raw);
+				return;
+			}
+
 			let open = true;
 			res.on("close", () => {
 				if (!res.writableEnded) state.aborted = true;
@@ -97,8 +111,25 @@ export async function startFake(opts: FakeOptions = {}): Promise<Fake> {
 				const frame = {
 					choices: [{ delta: { content: token }, index: 0 }],
 				};
-				res.write(`data: ${JSON.stringify(frame)}\n\n`);
-				await new Promise((r) => setTimeout(r, gapMs));
+				// Respect backpressure, as a real server does. Without this the
+				// fake dumps every frame into its own socket buffer and finishes
+				// writing before a client disconnect can ever be noticed — which
+				// makes `aborted` read false even when the gateway cancelled
+				// correctly.
+				state.framesSent += 1;
+				if (!res.write(`data: ${JSON.stringify(frame)}\n\n`)) {
+					await new Promise<void>((resolve) => {
+						const done = (): void => {
+							res.off("drain", done);
+							res.off("close", done);
+							resolve();
+						};
+						res.once("drain", done);
+						res.once("close", done);
+					});
+				}
+				if (!open) return;
+				if (gapMs > 0) await new Promise((r) => setTimeout(r, gapMs));
 			}
 			if (!open) return;
 			res.write("data: [DONE]\n\n");
@@ -118,6 +149,9 @@ export async function startFake(opts: FakeOptions = {}): Promise<Fake> {
 		received,
 		get aborted() {
 			return state.aborted;
+		},
+		get framesSent() {
+			return state.framesSent;
 		},
 		close: () =>
 			new Promise<void>((resolve) => {

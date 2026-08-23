@@ -111,10 +111,17 @@ async function chatCompletions(
 	// Upstream said no. Pass the status and its body through unchanged — the
 	// model's own error message is more useful than anything we would invent.
 	if (!response.ok || response.body === null) {
-		const text = response.body === null ? "" : await response.text();
+		// abort() in a finally: it clears the upstream timeout, and reading the
+		// body can throw if upstream resets the socket. Without this the timer
+		// survives to fire on its own, up to timeoutMs later.
+		let text = "";
+		try {
+			text = response.body === null ? "" : await response.text();
+		} finally {
+			abort();
+		}
 		res.writeHead(response.status, { "content-type": "application/json" });
 		res.end(text);
-		abort();
 		log.turn({
 			route: "chat",
 			status: response.status,
@@ -128,14 +135,18 @@ async function chatCompletions(
 
 	if (!stream) {
 		// Non-streaming, for curl. Not the Pi's path.
-		const text = await response.text();
+		let text: string;
+		try {
+			text = await response.text();
+		} finally {
+			abort(); // clears the timeout even if the read throws
+		}
 		res.writeHead(200, {
 			"content-type":
 				response.headers.get("content-type") ?? "application/json",
 			"content-length": Buffer.byteLength(text),
 		});
 		res.end(text);
-		abort();
 		log.turn({
 			route: "chat",
 			status: 200,
@@ -178,24 +189,47 @@ async function chatCompletions(
 	};
 	res.on("close", onClose);
 
+	// A write failing after the socket is gone must not take the process down:
+	// an 'error' event with no listener is an uncaught exception, and this
+	// server is shared by every turn.
+	res.on("error", onClose);
+
 	let bytes = 0;
 	try {
 		for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+			if (aborted || res.writableEnded || res.destroyed) break;
 			bytes += chunk.length;
 			// Backpressure: if the Pi is not draining, wait rather than buffer
 			// the whole answer in memory.
+			//
+			// The wait has to race the socket dying. A destroyed stream never
+			// emits 'drain', so waiting on it alone parks here forever if the
+			// Pi stalls and then disconnects — the loop never resumes, the
+			// finally below never runs, and the abort never reaches upstream,
+			// leaving rapid-mlx generating for a client that is gone.
 			if (!res.write(chunk)) {
-				await new Promise<void>((resolve) => res.once("drain", resolve));
+				await new Promise<void>((resolve) => {
+					const done = (): void => {
+						res.off("drain", done);
+						res.off("close", done);
+						res.off("error", done);
+						resolve();
+					};
+					res.once("drain", done);
+					res.once("close", done);
+					res.once("error", done);
+				});
 			}
 		}
-		res.end();
+		if (!res.writableEnded && !res.destroyed) res.end();
 	} catch (err) {
 		// Mid-stream failure. The headers are long gone, so there is no status
 		// left to set — end the stream and let the Pi's parser run dry.
 		if (!aborted) log.error("stream failed mid-flight", err);
-		res.end();
+		if (!res.writableEnded && !res.destroyed) res.end();
 	} finally {
 		res.off("close", onClose);
+		res.off("error", onClose);
 		abort();
 	}
 
