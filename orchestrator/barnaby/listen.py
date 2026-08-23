@@ -68,6 +68,12 @@ class Endpointer:
     #   256 -> 12% / 0%   (partially responsive, not good enough)
     #   512 ->  0% / 0%   <- what was hardcoded, i.e. a dead VAD
     # Ordered best-known first so an ambiguous probe result still lands well.
+    #
+    # This export's graph only accepts one analysis frame per call: measured,
+    # it runs for 256-640 samples and raises for anything outside that, so
+    # 1024 and 1536 are rejected outright here. They are kept anyway — the
+    # point of a candidate list is that the next export may differ — and the
+    # probe now runs on a silenced session so rejections cost no log noise.
     CANDIDATE_WINDOWS = (576, 512, 640, 256, 1024, 1536)
     WINDOW = 576
 
@@ -85,22 +91,43 @@ class Endpointer:
         self.reset()
 
     def load(self) -> None:
-        import onnxruntime as ort
-
         path = self._model_path()
-        opts = ort.SessionOptions()
-        opts.inter_op_num_threads = 1
-        opts.intra_op_num_threads = 1     # tiny model; threads cost more than they save
-        self._sess = ort.InferenceSession(path, opts,
-                                          providers=["CPUExecutionProvider"])
+        self._sess = self._session(path)
         self._names = {i.name: i.name for i in self._sess.get_inputs()}
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
-        self.WINDOW = self._detect_window()
+        self.WINDOW = self._detect_window(path)
         self.reset()
         log.info("VAD loaded from %s (hangover %.0f ms, window %d)", path,
                  self.hangover * 1000, self.WINDOW)
 
-    def _detect_window(self) -> int:
+    @staticmethod
+    def _session(path: str, quiet: bool = False):
+        """An inference session on the VAD model.
+
+        `quiet` silences onnxruntime's own C++ logging for this session only.
+        It is for the window probe, which deliberately runs sizes the graph
+        may reject: a rejected size is an ordinary Python exception we catch,
+        but onnxruntime has already written three lines per rejection to
+        stderr from C++ before the exception reaches us, so try/except cannot
+        suppress them. Every startup printed a wall of `ExecuteKernel ... LSTM`
+        errors for a probe that was working exactly as intended.
+
+        The real session is never quiet. That matters: the bug this probe
+        exists to catch survived a whole session precisely because nothing
+        complained, and training ourselves to scroll past onnxruntime errors
+        is how that happens again.
+        """
+        import onnxruntime as ort
+
+        opts = ort.SessionOptions()
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = 1     # tiny model; threads cost more than they save
+        if quiet:
+            opts.log_severity_level = 4   # Fatal — verified to suppress kernel errors
+        return ort.InferenceSession(path, opts,
+                                    providers=["CPUExecutionProvider"])
+
+    def _detect_window(self, path: str) -> int:
         """Find the window size this model actually wants.
 
         A mismatched size is silent: the graph accepts it and returns a near-
@@ -131,8 +158,10 @@ class Endpointer:
         # preferred size is kept unless it is *inert*, which is the failure
         # that actually happened and is unmistakable (0.0006 vs 0.17).
         DEAD = 0.05
+        sess = self._session(path, quiet=True)
         best_size, best_score = self.WINDOW, -1.0
-        scores: list[tuple[int, float]] = []
+        scores: dict[int, float] = {}
+        rejected: list[int] = []
         for size in self.CANDIDATE_WINDOWS:
             state = np.zeros((2, 1, 128), dtype=np.float32)
             score = 0.0
@@ -142,31 +171,38 @@ class Endpointer:
                             "sr": np.array(SAMPLE_RATE, dtype=np.int64)}
                     if "state" in self._names:
                         feed["state"] = state
-                    out = self._sess.run(None, feed)
+                    out = sess.run(None, feed)
                     score = max(score, float(np.asarray(out[0]).reshape(-1)[0]))
                     if len(out) > 1 and "state" in self._names:
                         state = np.asarray(out[1], dtype=np.float32)
             except Exception:                        # noqa: BLE001
-                continue                             # size the graph rejects
-            scores.append((size, score))
+                rejected.append(size)                # size the graph rejects
+                continue
+            scores[size] = score
             # Strictly greater, so a tie keeps the earlier — i.e. better known
             # — candidate rather than whichever happened to be probed last.
             if score > best_score:
                 best_size, best_score = size, score
 
-        detail = ", ".join(f"{sz}:{s:.3f}" for sz, s in scores)
-        preferred = dict(scores).get(self.WINDOW)
+        # One line of ours in place of the six per rejection onnxruntime used
+        # to print: the rejections are still on the record, just not as errors.
+        detail = ", ".join(f"{sz}:{scores[sz]:.3f}" if sz in scores
+                           else f"{sz}:rejected"
+                           for sz in self.CANDIDATE_WINDOWS)
+        preferred = scores.get(self.WINDOW)
 
         if preferred is not None and preferred >= DEAD:
             log.debug("VAD window %d (%s)", self.WINDOW, detail)
             return self.WINDOW
 
-        # The preferred size is inert on this model. Fall back to whatever did
-        # respond, and say so loudly — a silently dead VAD disables endpointing
-        # and the follow-up window while everything still appears to run.
+        # The preferred size does not work on this model. Fall back to whatever
+        # did respond, and say so loudly — a silently dead VAD disables
+        # endpointing and the follow-up window while everything still appears
+        # to run.
+        why = "rejected by" if self.WINDOW in rejected else "inert on"
         if best_score >= DEAD:
-            log.warning("VAD window %d is inert on this model; using %d "
-                        "instead (%s)", self.WINDOW, best_size, detail)
+            log.warning("VAD window %d is %s this model; using %d instead (%s)",
+                        self.WINDOW, why, best_size, detail)
             return best_size
 
         log.error("no VAD window size responded (%s) — endpointing and the "
