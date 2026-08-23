@@ -232,9 +232,10 @@ describe("agent loop with a tool", () => {
 			await collect(`http://127.0.0.1:${p}/v1/chat/completions`);
 			const second = fresh.bodies.at(-1) ?? "";
 			assert.match(second, /"role":"tool"/, "no tool message in round two");
+			// Structured data, not a sentence: the tool reports, the model speaks.
 			assert.match(
 				second,
-				/Forecast for/,
+				/temperature_max/,
 				"the tool result never reached the model",
 			);
 			assert.match(

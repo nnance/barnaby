@@ -90,6 +90,26 @@ offered, and the gateway falls back to phase 1's byte-for-byte passthrough.
 
 Keep the prose short — every word is sent on every turn.
 
+## Tools are data sources, not participants
+
+A tool takes structured input and returns structured output. It takes no
+argument that exists only to build a sentence, and it returns no prose.
+
+The weather tool returns dates rather than "tomorrow", raw temperatures rather
+than rounded ones, and every precipitation value however small. Deciding that
+1 percent is not worth mentioning, that a date is "Wednesday", or that 108.9
+should be said as "a hundred and nine" are all judgments the model makes better
+— and already makes for everything else it says. When a tool makes them it is
+doing the model's job badly, in a place with no context about the conversation.
+
+Speech concerns therefore belong in the system prompt, not in tools. Rounding
+spoken numbers is a line in `prompt.ts`.
+
+**Tools validate the contract, not the answer.** A latitude must be a number
+between -90 and 90, because that is what a latitude is. Whether those
+coordinates are the *right* place is the model's problem: if it gets that
+wrong, the fix is a better model, not a tool that argues with it.
+
 ## Routes
 
 | Route | Who calls it |
