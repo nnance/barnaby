@@ -54,7 +54,7 @@ mac:
   #   rapid-mlx serve kokoro                 --port 8002
   asr_url: http://nicks-mac-studio.local:8000/v1
   asr_model: whisper-large-v3-turbo
-  llm_url: http://nicks-mac-studio.local:8001/v1
+  llm_url: http://nicks-mac-studio.local:8100/v1
   llm_model: qwen3.8-27b-4bit
   tts_url: http://nicks-mac-studio.local:8002/v1
   tts_model: kokoro
