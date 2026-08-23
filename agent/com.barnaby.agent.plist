@@ -24,18 +24,27 @@
 	<array>
 		<!-- Absolute paths: launchd does not read your shell profile, so a
 		     version-managed `node` on PATH will not be found. `which node`. -->
-		<string>/usr/local/bin/node</string>
-		<string>/Users/CHANGEME/Developer/robots/barnaby/agent/src/main.ts</string>
+		<string>/opt/homebrew/bin/node</string>
+		<string>/Users/nicknance/Developer/robots/barnaby/agent/src/main.ts</string>
 	</array>
 
 	<key>WorkingDirectory</key>
-	<string>/Users/CHANGEME/Developer/robots/barnaby/agent</string>
+	<string>/Users/nicknance/Developer/robots/barnaby/agent</string>
 
 	<key>EnvironmentVariables</key>
 	<dict>
 		<!-- Same machine as rapid-mlx, so loopback. -->
 		<key>BARNABY_UPSTREAM_URL</key>
 		<string>http://127.0.0.1:8001/v1</string>
+		<!-- Norman, Oklahoma. Without both of these the weather tool is not
+		     registered at all and the gateway is a plain passthrough — a
+		     forecast for the wrong place is worse than no forecast. -->
+		<key>BARNABY_LATITUDE</key>
+		<string>35.22257</string>
+		<key>BARNABY_LONGITUDE</key>
+		<string>-97.43948</string>
+		<key>BARNABY_PLACE</key>
+		<string>Norman</string>
 	</dict>
 
 	<key>RunAtLoad</key>

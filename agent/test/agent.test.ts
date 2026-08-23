@@ -208,6 +208,7 @@ describe("agent loop with a tool", () => {
 		);
 		// The Pi must not be able to tell two inference rounds happened.
 		assert.equal(doneCount, 1, "the Pi saw more than one [DONE]");
+		// The acknowledgement is spoken first, then the answer.
 		assert.equal(text, "It is hot today.");
 		assert.ok(model.rounds >= 2, "the model was only called once");
 	});
@@ -316,9 +317,13 @@ describe("agent loop failure handling", () => {
 				`http://127.0.0.1:${port}/v1/chat/completions`,
 			);
 			assert.equal(doneCount, 1);
-			// The promise was already spoken and cannot be recalled, but the
-			// real answer has to follow it.
-			assert.match(text, /Let me check that for you\./);
+			// Round one's promise was HELD, not spoken, so the nudge can drop
+			// it entirely: the user hears the answer and never the false start.
+			assert.doesNotMatch(
+				text,
+				/Let me check that for you\./,
+				"the stale promise reached the speaker",
+			);
 			assert.match(
 				text,
 				/It is hot today\./,

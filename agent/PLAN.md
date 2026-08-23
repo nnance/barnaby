@@ -249,8 +249,13 @@ looks — round-two prefill is the target.
    pipeline speaking a line with no content in it. Either lean into it (make it
    deliberate and short) or suppress round-one content entirely when tools are
    on offer, which trades the gap back to silence.
-2. **A promise with nothing behind it.** Seen live once: the model said it would
-   check, stopped, and never called the tool, leaving the user with a promise
-   and silence. 8/8 probes could not reproduce it, so it is nondeterministic.
-   The loop now nudges once when round one reads like a promise and no tool was
-   called. Worth watching whether the nudge ever fires in real use.
+2. **A promise with nothing behind it — and it is routine, not rare.** Round
+   one often says it will check and then calls nothing. Earlier notes called
+   this nondeterministic on the strength of 8/8 clean probes; live traffic says
+   otherwise, with `rounds=3` on two of three turns. That is a wasted inference
+   round, ~1.5 s, on most weather questions.
+
+   The nudge handles it: the held promise is dropped and the model is asked
+   again. It costs the round but the user hears only the answer. The real fix is
+   whatever stops round one stalling in the first place, which is the same
+   problem as item 1.

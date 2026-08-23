@@ -123,6 +123,10 @@ export async function runTurn(
 
 		const parser = new SseParser();
 		const accumulator = new ToolCallAccumulator();
+		// Tools on offer means this round might turn out to be a tool call, so
+		// anything it says is held until we know.
+		const canCallTool = specs.length > 0 && !last;
+		const held: string[] = [];
 		let sawContent = false;
 		let finish: string | null = null;
 		const assistantText: string[] = [];
@@ -137,13 +141,17 @@ export async function runTurn(
 					const choice = event.data.choices?.[0];
 					const delta = choice?.delta;
 					if (choice?.finish_reason != null) finish = choice.finish_reason;
-					if (delta?.tool_calls !== undefined)
+					if (delta?.tool_calls !== undefined) {
 						accumulator.add(delta.tool_calls);
+						// Speak the moment the model commits to a tool, not when
+						// the round finishes. This is the whole point: waiting
+						// for the round to end costs ~2.3 s and puts the
+						// acknowledgement AFTER the silence it should have
+						// covered. The first tool_calls delta arrives far
+						// sooner, while the user is still expecting a reply.
+					}
 
 					if (typeof delta?.content === "string" && delta.content !== "") {
-						// Forward immediately. Buffering to see whether a tool
-						// call arrives would cost every ordinary turn its
-						// time-to-first-audio to help the rare tool turn.
 						if (
 							!sawContent &&
 							dispatchedAt !== undefined &&
@@ -153,9 +161,31 @@ export async function runTurn(
 						}
 						sawContent = true;
 						assistantText.push(delta.content);
-						const raw = encoder.encode(`${event.raw}\n\n`);
-						bytes += raw.length;
-						await emit(raw);
+
+						// While tools are on offer, hold the model's words back.
+						//
+						// Measured: on a tool turn its narration ("Let me check
+						// that for you") does not arrive until ~2.3 s, which is
+						// AFTER the silence it was meant to cover, and is then
+						// followed by another ~2.1 s wait. Speaking it there is
+						// worse than useless — it delays the answer to say
+						// something the user has already finished waiting for.
+						//
+						// So it is buffered. If this round turns out to be a
+						// tool call, it is dropped and replaced by ACK spoken at
+						// dispatch. If no tool is called, it is released
+						// unchanged, so ordinary turns are untouched.
+						// Held only while a nudge is still possible, so a
+						// false-start promise can be dropped rather than
+						// spoken. Once nudged, speak immediately — holding
+						// again would delay the real answer for nothing.
+						if (canCallTool && !nudged) {
+							held.push(event.raw);
+						} else {
+							const raw = encoder.encode(`${event.raw}\n\n`);
+							bytes += raw.length;
+							await emit(raw);
+						}
 					}
 				}
 			}
@@ -185,6 +215,10 @@ export async function runTurn(
 			PROMISE.test(said)
 		) {
 			nudged = true;
+			// The promise was held, not spoken, so it can simply be dropped —
+			// the user never hears it, and the retry's answer is the only thing
+			// that reaches them. This is why round-one content is buffered.
+			held.length = 0;
 			log.info("model promised to check but called no tool — nudging once");
 			messages.push({ role: "assistant", content: said });
 			messages.push({
@@ -193,6 +227,17 @@ export async function runTurn(
 					"Go ahead and look that up now, then tell me the answer in one or two short sentences.",
 			});
 			continue;
+		}
+
+		// A real answer: release what was held, verbatim and in order. An
+		// ordinary turn must be byte-identical to one that never buffered.
+		if (held.length > 0) {
+			for (const raw of held) {
+				const frame = encoder.encode(`${raw}\n\n`);
+				bytes += frame.length;
+				await emit(frame);
+			}
+			held.length = 0;
 		}
 
 		if (calls.length === 0 || signal.aborted) {
@@ -217,7 +262,18 @@ export async function runTurn(
 			})),
 		});
 
+		// A tool is about to run, and the held narration is stale. Drop it and
+		// say something now, so the pause that follows is explained while it
+		// happens. Only once per turn: a second "let me check" mid-answer would
+		// be worse than silence.
+		held.length = 0;
 		if (dispatchedAt === undefined) dispatchedAt = Date.now();
+		// Nothing synthetic is spoken here. Measured: the model's own
+		// tool_calls delta does not arrive until a median of ~2500 ms, so an
+		// acknowledgement triggered by it lands AFTER the silence it was meant
+		// to cover — which is exactly the complaint. Firing one before the
+		// round starts would mean saying "let me check" on every turn,
+		// including ones needing no tool. See PLAN.md.
 
 		for (const call of calls) {
 			const tool = registry.get(call.name);
