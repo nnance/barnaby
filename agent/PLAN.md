@@ -213,3 +213,44 @@ decisions made *before* the upstream call.
 - **No service unit yet.** Run it in a terminal while it is being built. It
   earns a `launchd` plist once it is boring, which is the same order the Pi's
   systemd unit came in.
+
+---
+
+## Phase 2 — measured
+
+Built 2026-08-23. The loop runs upstream rounds until the model stops asking
+for tools; the Pi still sees one SSE stream ending in one `[DONE]`, so it needed
+no change at all.
+
+**The gap is real and it is worse than the estimate.** Measured against the live
+model, four turns:
+
+```
+tool_gap = 1031, 1069, 1084, 1350 ms      (first tool dispatch -> next content token)
+time to first audio  ~1.9-2.5 s           against a 2000 ms budget
+non-tool turn        ~425 ms, unchanged
+```
+
+`--say`-style turns and any turn that uses no tool are untouched: with an empty
+registry the gateway falls through to phase 1's byte pipe, and with a registry
+a tool-less turn is a single round.
+
+**What the gap actually contains**, roughly: ~450 ms for round one to decide,
+~580 ms in Open-Meteo, and the rest re-prefilling round two. The tool call is
+the smallest part of the wait, so caching the forecast would buy less than it
+looks — round-two prefill is the target.
+
+**Two problems this surfaced, both still open:**
+
+1. **The model narrates.** It says "Let me check the forecast for you." in round
+   one, which is spoken, and then the real answer arrives a second later as a
+   separate sentence. It reads as an accidental filler phrase — the very thing
+   deliberately not built. It is not free: it is the whole `first_sentence`
+   pipeline speaking a line with no content in it. Either lean into it (make it
+   deliberate and short) or suppress round-one content entirely when tools are
+   on offer, which trades the gap back to silence.
+2. **A promise with nothing behind it.** Seen live once: the model said it would
+   check, stopped, and never called the tool, leaving the user with a promise
+   and silence. 8/8 probes could not reproduce it, so it is nondeterministic.
+   The loop now nudges once when round one reads like a promise and no tool was
+   called. Worth watching whether the nudge ever fires in real use.

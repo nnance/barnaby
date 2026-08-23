@@ -23,8 +23,11 @@ import {
 	type ServerResponse,
 	type Server,
 } from "node:http";
+import { runTurn, type AgentRequest } from "./agent.ts";
 import type { Config } from "./config.ts";
 import * as log from "./log.ts";
+import { buildRegistry } from "./tools/registry.ts";
+import type { Tool } from "./tools/types.ts";
 import { get, post } from "./upstream.ts";
 
 /** Read a request body with a ceiling, so a wrong request cannot exhaust memory. */
@@ -69,6 +72,7 @@ function sendError(res: ServerResponse, status: number, message: string): void {
  */
 async function chatCompletions(
 	cfg: Config,
+	registry: Map<string, Tool>,
 	req: IncomingMessage,
 	res: ServerResponse,
 ): Promise<void> {
@@ -79,11 +83,12 @@ async function chatCompletions(
 	// bytes that go upstream are the bytes that arrived, whatever this says.
 	let messages: number | undefined;
 	let stream = false;
+	let parsedBody: AgentRequest = { messages: [] };
 	try {
-		const parsed = JSON.parse(body.toString("utf8")) as {
-			messages?: unknown[];
+		const parsed = JSON.parse(body.toString("utf8")) as AgentRequest & {
 			stream?: boolean;
 		};
+		parsedBody = parsed;
 		messages = Array.isArray(parsed.messages)
 			? parsed.messages.length
 			: undefined;
@@ -91,6 +96,16 @@ async function chatCompletions(
 	} catch {
 		sendError(res, 400, "request body is not valid JSON");
 		log.turn({ route: "chat", status: 400, error: "bad json" });
+		return;
+	}
+
+	// With tools configured, the agent loop takes over: it may run several
+	// upstream rounds and re-frames what it forwards. Without them, fall
+	// through to phase 1's byte-for-byte pipe, which is strictly cheaper and
+	// cannot lose framing — there is no reason to parse a stream nobody
+	// needs parsed.
+	if (registry.size > 0 && stream) {
+		await agentStream(cfg, registry, parsedBody, res, began, messages);
 		return;
 	}
 
@@ -246,6 +261,95 @@ async function chatCompletions(
 }
 
 /**
+ * The tool-calling path.
+ *
+ * Owns the SSE response so that [DONE] is written in exactly one place. The
+ * write plumbing mirrors the passthrough path deliberately, including the
+ * drain-versus-close race: a stalled client that then dies must not park the
+ * loop forever, or rapid-mlx generates for nobody.
+ */
+async function agentStream(
+	cfg: Config,
+	registry: Map<string, Tool>,
+	parsedBody: AgentRequest,
+	res: ServerResponse,
+	began: number,
+	messages: number | undefined,
+): Promise<void> {
+	res.writeHead(200, {
+		"content-type": "text/event-stream; charset=utf-8",
+		"cache-control": "no-cache, no-transform",
+		connection: "keep-alive",
+		"content-encoding": "identity",
+		"x-accel-buffering": "no",
+	});
+	res.flushHeaders();
+
+	const controller = new AbortController();
+	let aborted = false;
+	const onClose = (): void => {
+		if (res.writableEnded) return;
+		aborted = true;
+		controller.abort();
+	};
+	res.on("close", onClose);
+	res.on("error", onClose);
+
+	// Same race as the passthrough path: a destroyed stream never drains.
+	const write = async (bytes: Uint8Array): Promise<void> => {
+		if (aborted || res.writableEnded || res.destroyed) return;
+		if (!res.write(bytes)) {
+			await new Promise<void>((resolve) => {
+				const done = (): void => {
+					res.off("drain", done);
+					res.off("close", done);
+					res.off("error", done);
+					resolve();
+				};
+				res.once("drain", done);
+				res.once("close", done);
+				res.once("error", done);
+			});
+		}
+	};
+
+	let result: Awaited<ReturnType<typeof runTurn>> | undefined;
+	let failed: string | undefined;
+	try {
+		result = await runTurn(cfg, parsedBody, registry, write, controller.signal);
+	} catch (err) {
+		failed = err instanceof Error ? err.message : String(err);
+		log.error("agent turn failed", err);
+	} finally {
+		// [DONE] is written here and nowhere else. The Pi's read loop breaks on
+		// it; without it the turn hangs to its 60 s timeout.
+		if (!aborted && !res.writableEnded && !res.destroyed) {
+			await write(new TextEncoder().encode("data: [DONE]\n\n"));
+			res.end();
+		}
+		res.off("close", onClose);
+		res.off("error", onClose);
+		controller.abort();
+	}
+
+	log.turn({
+		route: "chat",
+		status: 200,
+		messages,
+		stream: true,
+		totalMs: Date.now() - began,
+		bytes: result?.bytes ?? 0,
+		aborted,
+		...(failed !== undefined && { error: failed }),
+		...(result !== undefined && {
+			rounds: result.rounds,
+			...(result.toolsRun.length > 0 && { tools: result.toolsRun.join(",") }),
+			...(result.toolGapMs !== undefined && { toolGapMs: result.toolGapMs }),
+		}),
+	});
+}
+
+/**
  * GET /v1/models — proxied, not faked.
  *
  * `python -m barnaby --check` health-checks this exact path. Serving a made-up
@@ -293,13 +397,19 @@ async function healthz(
 /** Wire the routes onto a server. Exported so tests can bind an ephemeral port. */
 export function createAgentServer(cfg: Config): Server {
 	const startedAt = Date.now();
+	const registry = buildRegistry(cfg);
+	if (registry.size > 0) {
+		log.info(`tools: ${[...registry.keys()].join(", ")}`);
+	} else {
+		log.info("tools: none configured — pure passthrough");
+	}
 
 	const server = createServer((req, res) => {
 		const url = req.url ?? "/";
 		const path = url.split("?")[0] ?? "/";
 		const route = async (): Promise<void> => {
 			if (req.method === "POST" && path === "/v1/chat/completions") {
-				return await chatCompletions(cfg, req, res);
+				return await chatCompletions(cfg, registry, req, res);
 			}
 			if (req.method === "GET" && path === "/v1/models")
 				return await models(cfg, res);

@@ -30,6 +30,7 @@ function configFor(upstreamPort: number): Config {
 		host: "127.0.0.1",
 		upstream: `http://127.0.0.1:${upstreamPort}/v1`,
 		timeoutMs: 5_000,
+		maxToolRounds: 3,
 	};
 }
 

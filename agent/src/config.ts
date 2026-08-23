@@ -5,6 +5,8 @@
  * Mac, so upstream is 127.0.0.1. Nothing here needs setting to run it.
  */
 
+import type { WeatherConfig } from "./tools/weather.ts";
+
 export interface Config {
 	/** Port we listen on. Clear of the 8000-8002 rapid-mlx block on purpose. */
 	port: number;
@@ -16,6 +18,18 @@ export interface Config {
 	/** Upstream request timeout. The Pi gives up at 60 s, so we must fail
 	 * first — otherwise the Pi reports a timeout and we report nothing. */
 	timeoutMs: number;
+	/**
+	 * Where "the weather" means. Undefined disables the tool entirely rather
+	 * than guessing — a forecast for the wrong place is worse than none.
+	 */
+	weather?: WeatherConfig | undefined;
+	/**
+	 * How many tool rounds one turn may take before the loop gives up and lets
+	 * the model answer with what it has. A ceiling, not a target: each round is
+	 * a full inference, so this is the difference between a slow answer and a
+	 * turn that never ends.
+	 */
+	maxToolRounds: number;
 }
 
 function int(name: string, fallback: number): number {
@@ -36,5 +50,27 @@ export function load(): Config {
 			process.env.BARNABY_UPSTREAM_URL ?? "http://127.0.0.1:8001/v1"
 		).replace(/\/$/, ""),
 		timeoutMs: int("BARNABY_UPSTREAM_TIMEOUT_MS", 55_000),
+		weather: weatherFromEnv(),
+		maxToolRounds: int("BARNABY_MAX_TOOL_ROUNDS", 3),
+	};
+}
+
+/**
+ * Weather location, from the environment.
+ *
+ * Both coordinates must be present and numeric or the tool is not offered: a
+ * half-configured location would silently forecast the Gulf of Guinea.
+ */
+function weatherFromEnv(): WeatherConfig | undefined {
+	const lat = Number(process.env.BARNABY_LATITUDE);
+	const lon = Number(process.env.BARNABY_LONGITUDE);
+	if (!Number.isFinite(lat) || !Number.isFinite(lon)) return undefined;
+	const unit =
+		process.env.BARNABY_TEMP_UNIT === "celsius" ? "celsius" : "fahrenheit";
+	return {
+		latitude: lat,
+		longitude: lon,
+		place: process.env.BARNABY_PLACE ?? "home",
+		unit,
 	};
 }
