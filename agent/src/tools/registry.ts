@@ -9,6 +9,7 @@
 
 import type { Config } from "../config.ts";
 import type { Tool } from "./types.ts";
+import { clockTool } from "./clock.ts";
 import { weatherTool } from "./weather.ts";
 
 export function buildRegistry(cfg: Config): Map<string, Tool> {
@@ -20,7 +21,13 @@ export function buildRegistry(cfg: Config): Map<string, Tool> {
 	// would have nowhere to forecast and would either refuse or invent a
 	// place. No context also means no tools at all, which puts the gateway
 	// back on phase 1's byte-for-byte passthrough.
-	if (cfg.context.trim() !== "") tools.push(weatherTool(cfg.weather));
+	if (cfg.context.trim() !== "") {
+		// The clock rides with the other tools: it is only useful alongside
+		// something that returns dates, and on its own it would be a schema
+		// sent on every turn for nothing.
+		tools.push(clockTool({ timeZone: cfg.timeZone }));
+		tools.push(weatherTool(cfg.weather));
+	}
 
 	const registry = new Map<string, Tool>();
 	for (const tool of tools) registry.set(tool.name, tool);

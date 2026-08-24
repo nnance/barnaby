@@ -122,3 +122,24 @@ describe("the system prompt lives on the agent", () => {
 		);
 	});
 });
+
+describe("the system prompt is stable", () => {
+	it("does not change between turns", () => {
+		// A prompt carrying the current time would differ every minute and
+		// never match a cached prefix. rapid-mlx's prefix cache is worth about
+		// 300 ms a turn here, so the clock is a tool, not a prompt line.
+		const a = systemPrompt("household facts", "spoken aloud");
+		const b = systemPrompt("household facts", "spoken aloud");
+		assert.equal(a, b);
+		assert.doesNotMatch(
+			a,
+			/\d{4}-\d{2}-\d{2}/,
+			"a date leaked into the prompt",
+		);
+		assert.doesNotMatch(
+			a,
+			/current (date|time)/i,
+			"a clock leaked into the prompt",
+		);
+	});
+});

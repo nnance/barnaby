@@ -309,3 +309,48 @@ Tool calling is unaffected: 12/12 exact coordinates on the alias, same as before
 **The lesson, and it is in CLAUDE.md now: serve by alias, never by path.** A raw
 path works, answers correctly, and quietly costs you every optimisation the
 server has. `rapid-mlx models` lists the aliases.
+
+
+---
+
+## The clock, and a bug that is not fixed yet
+
+**The problem.** The model does not know the date, and it does not know that it
+does not know. Asked what day it was on a Sunday it said "Tuesday". Asked for
+Friday's forecast it returned Tuesday's numbers — the weather tool's ISO dates
+were correct throughout, and the model was mislabelling them onto weekday names.
+
+**Why it is a tool and not a line in the system prompt.** A prompt carrying the
+current time changes every minute, so it would never match a cached prefix.
+rapid-mlx's prefix cache is worth ~300 ms a turn here, and a clock in the prompt
+would quietly spend all of it. `systemPrompt()` is asserted to be stable between
+calls, and to contain no date, so this cannot creep back in.
+
+The definition is deliberately tiny — under 300 bytes, asserted — because every
+schema is sent on every turn and declaring tools at all already costs real time.
+
+**What works:** the tool returns the right answer
+(`{"date":"2026-08-23","weekday":"Sunday",...}`) in the household's timezone, and
+the model uses it correctly when it is handed the result — "It is Sunday, August
+23, 2026."
+
+**What does not:** the model rarely calls it. Weather questions produce
+`tools=get_forecast` alone, so "Friday" still gets Tuesday's numbers. Three
+descriptions were tried:
+
+| Description | Result |
+|---|---|
+| "Call this before working out what a day refers to" | Not called on "what day is it" |
+| "You do not know these; you must call this tool..." | Leaked the tool name into speech |
+| "Use this tool when you need the current date or time" | Clean, still not called |
+
+The second is worth noting as a general lesson: an emphatic, unusual description
+made the model *narrate the tool name aloud*. Plain wording behaves better even
+when it does not solve the problem.
+
+**The likely fix, not yet built.** Stop asking the model to map weekday names
+onto array positions at all. Give `get_forecast` an optional `date` parameter,
+so the model asks for `2026-08-28` rather than counting rows — and if it needs
+today's date to compute that, it has a reason to call the clock. The mismatch is
+between two tools' outputs, so the fix belongs at that seam rather than in more
+prompt wording.

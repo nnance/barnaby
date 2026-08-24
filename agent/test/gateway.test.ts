@@ -32,6 +32,7 @@ function configFor(upstreamPort: number): Config {
 		timeoutMs: 5_000,
 		maxToolRounds: 3,
 		context: "",
+		timeZone: "America/Chicago",
 		weather: { unit: "fahrenheit" },
 	};
 }

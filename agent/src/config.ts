@@ -32,6 +32,12 @@ export interface Config {
 	 */
 	context: string;
 	/**
+	 * The household's timezone, for resolving "tomorrow" and "Friday". Defaults
+	 * to the Mac's own zone, which is right when the robot is in the same
+	 * house as the agent and wrong the moment it is not.
+	 */
+	timeZone: string;
+	/**
 	 * The model to ask for, overriding whatever the caller sent.
 	 *
 	 * The agent owns this, not the Pi. Tools only work with a model that calls
@@ -76,6 +82,9 @@ export function load(): Config {
 		timeoutMs: int("BARNABY_UPSTREAM_TIMEOUT_MS", 55_000),
 		model: process.env.BARNABY_MODEL,
 		context,
+		timeZone:
+			process.env.BARNABY_TIMEZONE ??
+			Intl.DateTimeFormat().resolvedOptions().timeZone,
 		weather: weatherConfig(),
 		maxToolRounds: int("BARNABY_MAX_TOOL_ROUNDS", 3),
 	};
