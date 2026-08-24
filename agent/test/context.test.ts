@@ -136,10 +136,18 @@ describe("the system prompt is stable", () => {
 			/\d{4}-\d{2}-\d{2}/,
 			"a date leaked into the prompt",
 		);
+		// What matters is that no *value* varies, not that the words "date" and
+		// "time" never appear — the prompt tells the model it does not know
+		// them, which is static text and cache-safe.
 		assert.doesNotMatch(
 			a,
-			/current (date|time)/i,
-			"a clock leaked into the prompt",
+			/\d{1,2}:\d{2}/,
+			"a clock time leaked into the prompt",
+		);
+		assert.doesNotMatch(
+			a,
+			/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/,
+			"a weekday leaked into the prompt",
 		);
 	});
 });

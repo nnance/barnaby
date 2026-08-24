@@ -24,9 +24,17 @@ import type { Message } from "./agent.ts";
  * delivered — no mention of speaking, markdown, or length, because a caller
  * that renders markdown is just as valid as one that speaks.
  */
+// The date line is not redundant beside the clock tool, and it was measured.
+// Offered the tool with no such line the model answered "It is currently
+// Monday" from training data and never called it — 0/10. It does not know that
+// it does not know. With the line: 10/10, and the forecast tool is unaffected
+// either way. Phrasing matters: an emphatic "you MUST call this tool" made it
+// speak the tool's name aloud, so this states the fact plainly instead.
 const IDENTITY = `You are Barnaby, a companion robot in a shared home.
 
 If you do not know something, say so plainly rather than guessing.
+
+You do not know the current date or time. Use a tool to find them.
 
 Never read out personal information unless you have been told who is asking.`;
 

@@ -385,3 +385,42 @@ it is what tells the model which labelled row is the current one.
 none worked, because the problem was never that the model lacked the date — it
 was being asked to do arithmetic it is bad at. Moving the work into the tool
 output beat every attempt to describe the problem more emphatically.
+
+
+## Telling the model it does not know the date
+
+The clock tool worked and the model would not call it. Asked "what day is it"
+it answered "It is currently Monday" from training data — **0/10 tool calls**
+with the live prompt.
+
+A long detour was spent on the wrong hypotheses. Whether the tool was actually
+on the wire (it was — verified by intercepting the bytes). Whether the schema
+lacked a return description (adding one, and a `returns` schema: still 0/8).
+Whether tool *order* mattered (one run said 0/12 vs 12/12, the next said 3/10 —
+noise). Whether the speech guidance suppressed it (8/8 → 0/8 in one run, 6/8 in
+another).
+
+The fix was Nick's, and it is one line of the identity prompt:
+
+> You do not know the current date or time. Use a tool to find them.
+
+| | clock called | forecast |
+|---|---|---|
+| without the line | **0/10** | 10/10 |
+| **with the line** | **10/10** | 10/10 |
+
+The forecast tool is unaffected either way, and no tool name leaks into speech.
+
+**Why it is not redundant beside the tool's own description.** The description
+says what the tool is for. It does not say the model lacks the information, and
+the model does not know that it does not know — it answers confidently and
+wrongly. Naming the gap is what triggers the call.
+
+**Phrasing matters more than emphasis.** An earlier emphatic attempt — "you must
+call this tool" — made the model speak the tool's name aloud into the answer. A
+plain statement of fact behaves better than an instruction shouted louder.
+
+**It is cache-safe.** The line is static text, so the prompt still matches a
+cached prefix. The test that guards this was tightened rather than deleted: it
+now asserts no date, clock time or weekday *value* appears, instead of banning
+the words "date" and "time", which would have blocked this fix for no reason.
