@@ -87,8 +87,8 @@ required — the default derives the socket host from whoever served the page.
 The gateway between the Pi and rapid-mlx, and the future home of tool calling.
 Node 23+ strips types natively, so there is **no build step**: `pnpm start`
 runs `src/main.ts` directly. `src/server.ts` routes + SSE plumbing ·
-`src/upstream.ts` the only place an upstream URL is built · `bench.mjs` TTFT and
-tok/s against any model.
+`src/upstream.ts` the only place an upstream URL is built · `pnpm bench` TTFT
+and tok/s against any model.
 
 **Archived docs are history, not instruction.** Anything under a `docs/**/archive/`
 directory records what was true while something was being built, including

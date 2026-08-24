@@ -84,7 +84,7 @@
    never the one on offer. Tool decisions went 2287 → 530 ms, ordinary TTFT
    424 → 171 ms, throughput 37.8 → 82.2 tok/s. The bigger lesson was unrelated
    to precision: serve by rapid-mlx **alias**, never by HuggingFace path, or the
-   prefix cache never engages. `agent/bench.mjs` still runs the comparison.
+   prefix cache never engages. `pnpm bench` in `agent/` still runs the comparison.
 6. **Camera + face tracking** when the Wide arrives — emits `look` on the face
    channel, which the renderer already consumes.
 7. **ESP32 firmware.**
