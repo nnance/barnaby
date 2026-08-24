@@ -309,37 +309,60 @@ class Pipeline:
         reply: list[str] = []
         ack: asyncio.Task | None = None
 
-        def on_tool(phase: str, tools: list[str]) -> None:
-            """The agent says a tool is running. Explain the pause — but only
-            if it turns out to be a pause worth explaining.
-
-            The acknowledgement is armed on a timer and cancelled by the first
-            token, so a fast tool turn stays silent. An unconditional ack makes
-            fast turns WORSE: a chirp and then the answer 200 ms later is
-            noise, and it is the same mistake as the model narrating "let me
-            check" a second before it answers.
-            """
+        def stop_ack() -> None:
+            """The answer has begun, so stop saying we are working on it."""
             nonlocal ack
+            if ack is not None:
+                ack.cancel()
+                ack = None
+
+        def first_token() -> None:
+            # Cancel on the first TOKEN, not the first sentence. The sentence
+            # is ~150 ms later — buffering to a clause boundary — and every one
+            # of those milliseconds is a chance to chirp over the answer.
+            turn.mark("first_token")
+            stop_ack()
+
+        def on_tool(phase: str, tools: list[str]) -> None:
+            """The agent says a tool is running.
+
+            This no longer starts the acknowledgement — that is armed before
+            the request now, because the wait a user feels starts when they
+            stop talking, not when a tool happens to be chosen. What this is
+            still for is the metrics: `tool_started` and `tool_done` are what
+            let `--latency` say whether a slow turn was the model deciding,
+            the tool running, or round two prefilling.
+            """
             if phase == "started":
                 turn.mark("tool_started")
                 log.info("tool running: %s", ", ".join(tools) or "unnamed")
-                if ack is None and self.cfg.behaviour.tool_ack != "none":
-                    ack = asyncio.create_task(self._tool_ack(turn))
             elif phase == "finished":
                 turn.mark("tool_done")
 
         turn.mark("llm_sent")
 
+        # Armed BEFORE the request goes out, and cancelled by the first token.
+        #
+        # It used to be armed by the tool event, which meant it could only ever
+        # explain a tool gap — and a plain turn that stalled said nothing at
+        # all. But the wait a user feels has nothing to do with whether a tool
+        # was involved: it starts the moment they stop talking. So the meaning
+        # changed from "a tool is running" to "I heard you, I am working".
+        #
+        # The cost is that this now runs on EVERY turn, so the threshold is
+        # doing all the work of keeping him quiet — see `_tool_ack`.
+        if self.cfg.behaviour.tool_ack != "none":
+            ack = asyncio.create_task(self._tool_ack(turn))
+
         try:
             async for sentence, is_first in self.llm.stream_sentences(
-                    messages, on_first_token=lambda: turn.mark("first_token"),
+                    messages, on_first_token=first_token,
                     on_tool=on_tool):
                 if is_first:
-                    # The answer is here, so the pause is over. Anything still
-                    # waiting to acknowledge it is now late and unwelcome.
-                    if ack is not None:
-                        ack.cancel()
-                        ack = None
+                    # Belt and braces: on_first_token is the real cancel, but a
+                    # sentence arriving without one having fired must not leave
+                    # a chirp armed to land on top of the answer.
+                    stop_ack()
                     turn.mark("first_sentence")
                 reply.append(sentence)
                 pending.append(asyncio.create_task(self.tts.synth(sentence)))
@@ -348,10 +371,9 @@ class Pipeline:
             log.exception("LLM failed")
             await self.face.set_fault("offline")
         finally:
-            # A turn that died mid-tool must not leave a chirp armed to fire
-            # into the next one.
-            if ack is not None:
-                ack.cancel()
+            # A turn that died must not leave a chirp armed to fire into the
+            # next one, or into the follow-up window.
+            stop_ack()
 
         while pending:
             await self._drain(pending, turn, wait=True)
@@ -377,8 +399,18 @@ class Pipeline:
             self.speaker.push(clip)
 
     async def _tool_ack(self, turn: Turn) -> None:
-        """Acknowledge a tool that is taking a while. Cancelled if the answer
-        arrives first, which is the whole design — see `on_tool`.
+        """Say "still working" while a turn is slow, until the answer starts.
+
+        Armed before the request and cancelled by the first token, so the
+        threshold is the only thing keeping him quiet on a fast turn — see
+        `_answer`. Waits `tool_ack_after_ms`, chirps, then repeats every
+        `tool_ack_repeat_ms` for as long as the wait lasts.
+
+        Repeating is the point of the repeat: one chirp says "heard you", and
+        on a genuinely long wait silence afterwards is indistinguishable from
+        having crashed. It is also the risk — a sound every couple of seconds
+        on a kitchen counter turns into an alarm, so `tool_ack_repeat_ms` is
+        the knob to raise first, and 0 turns it back into a single chirp.
 
         Deliberately not spoken by default. A chirp is instant and needs no
         network; TTS costs a round trip inside the gap it is covering and then
@@ -388,19 +420,28 @@ class Pipeline:
         behaviour = self.cfg.behaviour
         try:
             await asyncio.sleep(behaviour.tool_ack_after_ms / 1000)
-            if behaviour.tool_ack == "speak":
-                clip = await self.tts.synth(behaviour.tool_ack_text)
-            else:
-                clip = chirp(self.speaker.rate)
-            # The answer may have arrived while TTS was running. Losing that
-            # race is the failure this whole timer exists to avoid, so check
-            # again at the last moment before making a sound.
-            if self.speaker.is_playing:
-                return
-            turn.mark("tool_ack")
-            log.info("acknowledged a slow tool (%s)", behaviour.tool_ack)
-            self.speaker.push(clip)
-            self.speaker.end_utterance()
+            n = 0
+            while True:
+                if behaviour.tool_ack == "speak" and n == 0:
+                    # Only ever spoken once. Repeating a sentence is narration,
+                    # and narration is what the chirp exists to avoid.
+                    clip = await self.tts.synth(behaviour.tool_ack_text)
+                else:
+                    clip = chirp(self.speaker.rate)
+                # The answer may have arrived while TTS was running, or while
+                # we slept. Losing that race is the failure this timer exists
+                # to avoid, so check at the last moment before making a sound.
+                if self.speaker.is_playing:
+                    return
+                n += 1
+                if n == 1:
+                    turn.mark("tool_ack")
+                    log.info("acknowledging a slow turn (%s)", behaviour.tool_ack)
+                self.speaker.push(clip)
+                self.speaker.end_utterance()
+                if not behaviour.tool_ack_repeat_ms:
+                    return
+                await asyncio.sleep(behaviour.tool_ack_repeat_ms / 1000)
         except asyncio.CancelledError:
             raise
         except Exception:                          # noqa: BLE001

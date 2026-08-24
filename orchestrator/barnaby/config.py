@@ -52,7 +52,7 @@ class MacCfg:
     asr_url: str = "http://mac.local:8000/v1"
     asr_model: str = "whisper-large-v3-turbo"
     llm_url: str = "http://mac.local:8001/v1"
-    llm_model: str = "qwen3.8-27b-4bit"
+    llm_model: str = "qwen3.6-35b-8bit"
     tts_url: str = "http://mac.local:8002/v1"
     tts_model: str = "kokoro"
     tts_voice: str = "af_heart"
@@ -99,26 +99,40 @@ class BehaviourCfg:
     # the session still resolves "what about tomorrow".
     session_idle_ms: int = 180_000   # ~3 min, matching sleep_after_frames
 
-    # What to do when the agent says a tool is running, which it does the
-    # moment the model commits to one — measured ~950 ms in, against a gap of
-    # ~1000 ms before the answer starts.
+    # "I heard you, I am working on it", while a turn is slow.
     #
-    # "chirp" is the default for the same reason tier 0 chirps rather than
-    # narrating: it is instant, needs no network, and costs nothing. "speak"
-    # sends a line to TTS, which costs a Kokoro round trip (~290 ms for the
-    # first clip) inside the very gap it is covering, and then has to finish
-    # playing before the answer can start. "none" leaves only the face.
+    # Armed when the request goes out and cancelled by the first token, so it
+    # covers the whole wait rather than only a tool call. It was tool-only at
+    # first, which was wrong twice over: it could not explain a plain turn that
+    # stalled, and it fired ~700 ms into a gap the user had already been
+    # waiting through. The wait a user feels starts when they stop talking.
+    #
+    # "chirp" is the default for the reason tier 0 chirps rather than
+    # narrating: instant, no network, no cost. "speak" sends a line to TTS,
+    # which costs a Kokoro round trip (~290 ms) inside the gap it is covering
+    # and must finish playing before the answer starts; it is said once and
+    # then repeats as chirps, because a repeated sentence is narration.
+    # "none" disables the sound and leaves only the face.
     tool_ack: str = "chirp"          # chirp | speak | none
-    # Spoken only when tool_ack is "speak". Kept short for the reason above.
+    # Spoken only when tool_ack is "speak", and only the first time.
     tool_ack_text: str = "Let me check."
-    # Wait this long after the tool starts before acknowledging, and cancel if
-    # the answer arrives first. THIS IS THE POINT: an unconditional ack makes
-    # fast turns worse — a chirp followed 200 ms later by the answer is noise.
-    # Only turns that actually stall get acknowledged.
+    # Wait this long before acknowledging, and cancel if the answer arrives
+    # first. THIS THRESHOLD IS THE ONLY THING KEEPING HIM QUIET, now that the
+    # timer runs on every turn rather than only on tool turns.
     #
-    # Measured gap is ~1000 ms, so 700 fires on a typical tool turn while
-    # staying silent on a fast one. Raise it if he chirps over himself.
+    # Measured to first token: plain turn ~1200 ms, tool turn ~2200 ms. So 700
+    # deliberately chirps on nearly everything that is not instant — chosen
+    # because a chirp that only sometimes arrives is more startling than one
+    # that reliably does. Raise it toward 1500 to go back to acknowledging
+    # only the genuinely slow turns.
     tool_ack_after_ms: int = 700
+    # Chirp again every this many ms while still waiting. 0 fires once only.
+    #
+    # The case for repeating: after one chirp, silence is indistinguishable
+    # from having crashed. The case against: a sound every two seconds on a
+    # kitchen counter becomes an alarm. This is the first knob to raise if he
+    # gets annoying, and 0 is the way back to a single chirp.
+    tool_ack_repeat_ms: int = 2000
 
 
 @dataclass

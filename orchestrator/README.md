@@ -57,7 +57,7 @@ On the **Mac** — three instances, since Rapid-MLX serves one model each:
 ```bash
 pip install 'rapid-mlx[audio]'
 rapid-mlx serve whisper-large-v3-turbo --port 8000
-rapid-mlx serve qwen3.8-27b-4bit       --port 8001 --no-think
+rapid-mlx serve qwen3.6-35b-8bit       --port 8001 --no-think
 rapid-mlx serve kokoro                 --port 8002
 ```
 
@@ -144,34 +144,48 @@ numbers measured this way are real.
 | Have to re-wake him for every follow-up | `follow_up_ms` up, or check it is not 0 |
 | Answers as if mid-conversation, hours later | `session_idle_ms` down — history has not expired |
 | Chirps and then answers immediately after | `tool_ack_after_ms` up — the ack is firing on turns that were never slow |
-| Long unexplained silence on weather questions | `tool_ack_after_ms` down, or check the agent is sending tool events at all |
+| Chirping gets annoying / feels like an alarm | `tool_ack_repeat_ms` up, or `0` for one chirp only |
+| Long unexplained silence before an answer | `tool_ack_after_ms` down |
 
 Latency knobs are worth changing against data rather than impressions:
 `python -m barnaby --latency` summarises the recorded turns per stage, and
 every turn appends to `~/.cache/barnaby/turns.jsonl`.
 
-### Acknowledging a slow tool
+### Acknowledging a slow turn
 
-A tool turn is silent for ~1000 ms while the agent runs a round of inference,
-calls the tool, and prefills a second round. The agent streams a
-`barnaby.tool_call` event when that starts, and the Pi decides what to do:
+A turn can be silent for a while — ~700 ms of model thinking on a plain
+question, ~2.2 s on one that calls a tool (the model deciding, the tool
+running, then round two prefilling). Unexplained, that reads as a hang.
+
+So Barnaby chirps while he works. The timer is **armed when the request goes
+out** and **cancelled by the first token**:
 
 | Knob | Default | Notes |
 |---|---|---|
 | `tool_ack` | `chirp` | `chirp`, `speak`, or `none` |
-| `tool_ack_after_ms` | `700` | Wait this long, and cancel if the answer arrives first |
-| `tool_ack_text` | `Let me check.` | Only when `tool_ack` is `speak` |
+| `tool_ack_after_ms` | `700` | Wait this long before the first sound |
+| `tool_ack_repeat_ms` | `2000` | Chirp again every this long. `0` fires once |
+| `tool_ack_text` | `Let me check.` | Only when `tool_ack` is `speak`, and only said once |
 
-**`tool_ack_after_ms` is the important one.** The acknowledgement is armed on a
-timer and cancelled by the first token, so only turns that actually stall get
-acknowledged. An unconditional ack makes fast turns *worse* — a chirp followed
-200 ms later by the answer is noise, and it is the same mistake as the model
-narrating "let me check" a second before it answers.
+**`tool_ack_after_ms` is the only thing keeping him quiet**, because the timer
+now runs on every turn rather than only on tool turns. Measured to first token:
+a cached plain question can come back in ~670 ms and stay silent, a tool turn
+takes ~2.2 s and always chirps. Raise it toward 1500 to acknowledge only tool
+turns; lower it to ~400 to chirp on nearly everything.
+
+It was armed by the tool event at first, which was wrong twice over: it could
+not explain a plain turn that stalled, and it fired part-way into a gap the
+user had already been waiting through. The wait a user feels starts when they
+stop talking, not when a tool is chosen.
 
 `chirp` is the default for the reason tier 0 chirps rather than narrating: it
 is instant and needs no network. `speak` costs a Kokoro round trip (~290 ms)
 inside the gap it is covering and must finish playing before the answer starts,
-so it turns an acknowledgement into a delay. Try it, but measure it.
+so it turns an acknowledgement into a delay; it is said once and then repeats
+as chirps, because a repeated sentence is narration.
+
+**If it gets annoying**, raise `tool_ack_repeat_ms` first, or set it to `0` for
+a single chirp. A sound every two seconds on a kitchen counter becomes an alarm.
 
 `--latency` gains `tool_started`, `tool_ack` and `tool_done` marks, which sit
 between `llm_sent` and `first_token` because that is exactly where the silence

@@ -50,12 +50,12 @@ wake:
 mac:
   # Rapid-MLX serves ONE model per instance, so three ports.
   #   rapid-mlx serve whisper-large-v3-turbo --port 8000
-  #   rapid-mlx serve qwen3.8-27b-4bit       --port 8001
+  #   rapid-mlx serve qwen3.6-35b-8bit       --port 8001
   #   rapid-mlx serve kokoro                 --port 8002
   asr_url: http://nicks-mac-studio.local:8000/v1
   asr_model: whisper-large-v3-turbo
   llm_url: http://nicks-mac-studio.local:8100/v1
-  llm_model: qwen3.8-27b-4bit
+  llm_model: qwen3.6-35b-8bit
   tts_url: http://nicks-mac-studio.local:8002/v1
   tts_model: kokoro
   # `curl http://<mac>:8002/v1/audio/voices` lists all 53.

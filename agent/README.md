@@ -201,7 +201,7 @@ By hand, against the real thing:
 ```bash
 curl -sN http://localhost:8100/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"qwen3.8-27b-4bit","messages":[{"role":"user","content":"hello"}],"stream":true}'
+  -d '{"model":"qwen3.6-35b-8bit","messages":[{"role":"user","content":"hello"}],"stream":true}'
 ```
 
 Watch it, do not just capture it. Frames must appear one at a time. If the
