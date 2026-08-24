@@ -99,54 +99,42 @@ class BehaviourCfg:
     # the session still resolves "what about tomorrow".
     session_idle_ms: int = 180_000   # ~3 min, matching sleep_after_frames
 
-    # "I heard you, I am working on it", while a turn is slow.
+    # "I heard you, and I am working on it" — played once, when a turn is slow.
     #
-    # Armed when the request goes out and cancelled by the first token, so it
-    # covers the whole wait rather than only a tool call. It was tool-only at
-    # first, which was wrong twice over: it could not explain a plain turn that
-    # stalled, and it fired ~700 ms into a gap the user had already been
-    # waiting through. The wait a user feels starts when they stop talking.
+    # Armed when the request goes out and cancelled when real audio reaches the
+    # speaker, so it covers the whole wait rather than only a tool call. It was
+    # tool-only at first, which was wrong twice over: it could not explain a
+    # plain turn that stalled, and it fired part-way into a gap the user had
+    # already been waiting through. The wait a user feels starts when they stop
+    # talking.
     #
-    # "chirp" is the default for the reason tier 0 chirps rather than
-    # narrating: instant, no network, no cost. "speak" sends a line to TTS,
-    # which costs a Kokoro round trip (~290 ms) inside the gap it is covering
-    # and must finish playing before the answer starts; it is said once and
-    # then repeats as chirps, because a repeated sentence is narration.
-    # "none" disables the sound and leaves only the face.
-    # "hold" is the IVR pattern: a soft tone playing CONTINUOUSLY until the
-    # answer starts, so there is never any silence to misread as a hang. It is
-    # the most reassuring and also the most intrusive — it is a sound in your
-    # kitchen for the whole wait, so try it before assuming you want it.
-    tool_ack: str = "hold"           # hold | chirp | speak | none
-    # Spoken only when tool_ack is "speak", and only the first time.
+    # "bubbles" is four quick rising blips, ~0.6 s. The rising contour is the
+    # part that says "still working" — a falling one reads as "done", which is
+    # the wrong message while the answer is still coming.
+    #
+    # A continuous tone filling the whole wait was built and lived with, and it
+    # was too much: reassuring for a second, wearing by the fifth. The finding
+    # worth keeping is that one gesture with shape beats an unbroken sound; the
+    # implementation is in git if it is ever wanted back.
+    #
+    # "chirp" is the original two descending notes — terser, and it says he
+    # heard you without suggesting anything is ongoing. "speak" sends a line to
+    # TTS, which costs a Kokoro round trip (~290 ms) inside the gap it is
+    # covering and must finish playing before the answer starts. "none"
+    # disables the sound and leaves only the face.
+    tool_ack: str = "bubbles"        # bubbles | chirp | speak | none
+    # Spoken only when tool_ack is "speak".
     tool_ack_text: str = "Let me check."
     # Wait this long before acknowledging, and cancel if the answer arrives
-    # first. THIS THRESHOLD IS THE ONLY THING KEEPING HIM QUIET, now that the
+    # first. THIS THRESHOLD IS THE ONLY THING KEEPING HIM QUIET, since the
     # timer runs on every turn rather than only on tool turns.
     #
-    # Measured to first token: plain turn ~1200 ms, tool turn ~2200 ms. So 700
-    # deliberately chirps on nearly everything that is not instant — chosen
-    # because a chirp that only sometimes arrives is more startling than one
-    # that reliably does. Raise it toward 1500 to go back to acknowledging
-    # only the genuinely slow turns.
+    # Measured to first audio: a cached plain question can come back in under
+    # 700 ms and stay silent, while a tool turn takes ~3 s and always sounds.
+    # Lower toward 300 to acknowledge nearly every turn — worth considering,
+    # since "I heard you" is most useful when it is reliable. Raise toward 1500
+    # to sound only on the genuinely slow ones.
     tool_ack_after_ms: int = 700
-    # How long each hold-tone segment is, when tool_ack is "hold". Segments
-    # tile seamlessly; one is queued at a time so cancelling never leaves more
-    # than this much tone to drain before the answer plays.
-    #
-    # 2000 matches the bubble pattern in `hold_tone`, whose last bubble starts
-    # at 1.70 s. Shortening this TRUNCATES the pattern rather than speeding it
-    # up — at 1000 you would hear only the first four bubbles and then a jump
-    # back to the start. Change the pattern, not this, to retime the bubbles.
-    tool_ack_segment_ms: int = 2000
-    # Chirp again every this many ms while still waiting. 0 fires once only.
-    # Ignored when tool_ack is "hold", which is continuous by definition.
-    #
-    # The case for repeating: after one chirp, silence is indistinguishable
-    # from having crashed. The case against: a sound every two seconds on a
-    # kitchen counter becomes an alarm. This is the first knob to raise if he
-    # gets annoying, and 0 is the way back to a single chirp.
-    tool_ack_repeat_ms: int = 2000
 
 
 @dataclass

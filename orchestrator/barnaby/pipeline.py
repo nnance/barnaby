@@ -424,96 +424,48 @@ class Pipeline:
             self.speaker.push(clip)
 
     async def _tool_ack(self, turn: Turn) -> None:
-        """Say "still working" while a turn is slow, until the answer starts.
+        """Acknowledge, once, that a turn is taking a moment.
 
-        Armed before the request and cancelled by the first token, so the
-        threshold is the only thing keeping him quiet on a fast turn — see
-        `_answer`. Waits `tool_ack_after_ms`, chirps, then repeats every
-        `tool_ack_repeat_ms` for as long as the wait lasts.
+        Armed before the request and cancelled by real audio reaching the
+        speaker, so `tool_ack_after_ms` is the only thing keeping him quiet on
+        a fast turn — see `_answer`.
 
-        Repeating is the point of the repeat: one chirp says "heard you", and
-        on a genuinely long wait silence afterwards is indistinguishable from
-        having crashed. It is also the risk — a sound every couple of seconds
-        on a kitchen counter turns into an alarm, so `tool_ack_repeat_ms` is
-        the knob to raise first, and 0 turns it back into a single chirp.
+        It plays ONCE. A tone that filled the entire wait was built and lived
+        with, and it was too much: reassuring for a second, wearing by the
+        fifth. One gesture with shape does the same job, provided the gesture
+        actually has shape — a bare chirp is too terse to say that anything is
+        still in progress, which is what `bubbles` is for.
 
-        Deliberately not spoken by default. A chirp is instant and needs no
+        Deliberately not spoken by default. Bubbles are instant and need no
         network; TTS costs a round trip inside the gap it is covering and then
         has to finish playing before the answer can start, which is how an
         acknowledgement turns into a delay. Same reasoning as tier 0's chirp.
         """
         behaviour = self.cfg.behaviour
-        rate = self.speaker.rate
         try:
             await asyncio.sleep(behaviour.tool_ack_after_ms / 1000)
 
-            if behaviour.tool_ack == "hold":
-                await self._hold_tone(turn)
-                return
+            if behaviour.tool_ack == "speak":
+                clip = await self.tts.synth(behaviour.tool_ack_text)
+            elif behaviour.tool_ack == "chirp":
+                clip = chirp(self.speaker.rate)
+            else:
+                clip = bubbles(self.speaker.rate)
 
-            n = 0
-            while True:
-                if behaviour.tool_ack == "speak" and n == 0:
-                    # Only ever spoken once. Repeating a sentence is narration,
-                    # and narration is what the chirp exists to avoid.
-                    clip = await self.tts.synth(behaviour.tool_ack_text)
-                else:
-                    clip = chirp(rate)
-                # The answer may have arrived while TTS was running, or while
-                # we slept. Losing that race is the failure this timer exists
-                # to avoid, so check at the last moment before making a sound.
-                if self.speaker.is_playing:
-                    return
-                n += 1
-                if n == 1:
-                    turn.mark("tool_ack")
-                    log.info("acknowledging a slow turn (%s)", behaviour.tool_ack)
-                self.speaker.push(clip)
-                self.speaker.end_utterance()
-                if not behaviour.tool_ack_repeat_ms:
-                    return
-                await asyncio.sleep(behaviour.tool_ack_repeat_ms / 1000)
+            # The answer may have arrived while TTS was running, or while we
+            # slept. Losing that race is the failure this timer exists to
+            # avoid, so check at the last moment before making a sound.
+            if self.speaker.is_playing:
+                return
+            turn.mark("tool_ack")
+            log.info("acknowledged a slow turn (%s)", behaviour.tool_ack)
+            self.speaker.push(clip)
+            self.speaker.end_utterance()
         except asyncio.CancelledError:
             raise
         except Exception:                          # noqa: BLE001
             # Never let an acknowledgement break the turn it was decorating.
             log.exception("tool acknowledgement failed")
-
-    async def _hold_tone(self, turn: Turn) -> None:
-        """Play a continuous hold tone until cancelled — the IVR pattern.
-
-        One segment is queued at a time, and the next is not pushed until the
-        last has nearly finished. That is what makes this safe to cancel: the
-        queue never holds tone that would have to play before the answer could,
-        so stopping is just "stop pushing" and the tail is one segment at most.
-
-        It deliberately does NOT call `speaker.interrupt()` to cut that tail.
-        Interrupt drops the whole queue, and by the time the answer arrives its
-        first clip may already be in it — cutting the tone would take the first
-        sentence with it. A tone that overlaps the first word by a fraction of
-        a second is a far smaller problem than an answer that never plays.
-        """
-        seg_ms = self.cfg.behaviour.tool_ack_segment_ms
-        turn.mark("tool_ack")
-        log.info("holding (tone) until the answer starts")
-        phase = 0.0
-        while True:
-            # NOTE: there is deliberately no `if speaker.is_playing: return`
-            # here, though the chirp path has one. It cannot work for a tone:
-            # `is_playing` is true because THIS loop is playing, so the guard
-            # fires on its own output and the tone stops after one segment —
-            # which is exactly the "no tone at all" symptom. Cancellation from
-            # `_drain` is the only stop signal, and it is a reliable one.
-            self.speaker.push(hold_tone(self.speaker.rate, seg_ms, phase))
-            self.speaker.end_utterance()
-            # Carry the sine's phase so the next segment abuts this one without
-            # a click. 440 Hz over seg_ms seconds, wrapped.
-            phase = (phase + 2 * np.pi * 440.0 * (seg_ms / 1000)) % (2 * np.pi)
-            # Wake slightly before the segment ends, so the next one is queued
-            # while this is still playing and the tone stays unbroken. Too
-            # early and segments pile up in the queue; this keeps at most one
-            # waiting behind the one playing.
-            await asyncio.sleep(max(0.05, (seg_ms - 60) / 1000))
 
     async def _speak_one(self, text: str, turn: Turn) -> None:
         clip = await self.tts.synth(text)
@@ -522,14 +474,18 @@ class Pipeline:
         self.speaker.end_utterance()
 
 
-# The bubbles in one hold-tone segment: (start seconds, base Hz).
+# The acknowledgement: four quick bubbles, rising. (start seconds, base Hz).
 #
-# Deliberately uneven. Evenly spaced blips read as a machine ticking; uneven
-# ones read as something bubbling, which is the whole point. Chosen by ear
-# against a set of candidates — see docs/plans for the ones that lost.
+# It plays ONCE per turn, not continuously — a tone filling the whole wait was
+# tried and was too much to live with. This has to do the same job in half a
+# second: confirm he heard you AND that he is still working.
+#
+# RISING is deliberate. A falling contour reads as "done", which is precisely
+# the wrong message when the answer has not arrived yet. Four of them rather
+# than two because two reads as a chirp, and a chirp is too terse to say
+# anything is ongoing.
 _BUBBLES = (
-    (0.04, 210.0), (0.26, 250.0), (0.50, 225.0), (0.72, 270.0),
-    (0.96, 215.0), (1.20, 255.0), (1.44, 235.0), (1.70, 265.0),
+    (0.02, 200.0), (0.16, 235.0), (0.30, 275.0), (0.44, 320.0),
 )
 # How long one bubble lasts, and how far its pitch rises over that time. The
 # rise is what makes it a bubble rather than a beep: 2.6 means it ends at 3.6x
@@ -538,36 +494,30 @@ _BUBBLE_WIDTH_S = 0.16
 _BUBBLE_SWEEP = 2.6
 
 
-def hold_tone(rate: int, ms: int = 2000, phase: float = 0.0,
-              level: float = 0.09) -> np.ndarray:
-    """Bubbles, played while Barnaby is thinking. An acknowledgement tone.
+def bubbles(rate: int, level: float = 0.09) -> np.ndarray:
+    """The acknowledgement: four rising bubbles, ~0.6 s. Played once.
 
-    Meant to be played back-to-back for as long as the wait lasts. It tiles
-    without a click for a simpler reason than the old sine did: every bubble
-    begins and ends at silence inside the segment, so the segment's own edges
-    are already zero and `phase` is accepted only for signature compatibility.
+    Says two things a plain chirp could not: that he heard you, and that he is
+    still working. The rising contour carries the second half — see `_BUBBLES`.
 
-    Quiet on purpose — it sits under the room rather than announcing itself. A
-    hold tone that demands attention is worse than silence, and this one plays
-    for the whole wait rather than once.
+    Quiet on purpose (peak 0.09 against the chirp's 0.22). It confirms rather
+    than announces, and it plays while the user is waiting, not to summon them.
 
-    What it replaced: a 440 Hz sine pulsing hard on and off, which read as a
-    telephone hold beep and was actively annoying. The lesson worth keeping is
-    that the on/off chop was most of the problem — a continuous or overlapping
-    texture is far easier to sit next to than a repeating beep.
+    What this replaced: a tone that played CONTINUOUSLY for the whole wait,
+    which was reassuring in principle and wearing in practice. One gesture with
+    shape beats an unbroken sound — but a bare chirp is too terse to say
+    anything is ongoing, which is why this is four bubbles and not one blip.
     """
-    n = int(rate * ms / 1000)
+    span = max(start + _BUBBLE_WIDTH_S for start, _ in _BUBBLES)
+    n = int(rate * span)
     t = np.arange(n, dtype=np.float32) / rate
-    dur = ms / 1000
     out = np.zeros(n, dtype=np.float32)
     for start, f0 in _BUBBLES:
-        if start >= dur:
-            continue
         mask = (t >= start) & (t < start + _BUBBLE_WIDTH_S)
         if not mask.any():
             continue
         local = t[mask] - start
-        # Pitch rises across the bubble: the "bloop".
+        # Pitch rises across each bubble: the "bloop".
         freq = f0 * (1 + _BUBBLE_SWEEP * local / _BUBBLE_WIDTH_S)
         # sin^2 rather than sin^3: softer than a click, but articulated enough
         # that the bubbles stay distinct instead of blurring into a hum.
