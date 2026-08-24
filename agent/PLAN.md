@@ -259,3 +259,53 @@ looks — round-two prefill is the target.
    again. It costs the round but the user hears only the answer. The real fix is
    whatever stops round one stalling in the first place, which is the same
    problem as item 1.
+
+
+---
+
+## The alias, and the 300 ms that was never the gateway's fault
+
+Chasing a plain-chat regression to its end, through three wrong answers.
+
+**What was blamed, and was innocent.** First the prompt composition (it costs
+79 ms). Then the gateway (measured against a payload without tools, which was
+not a fair comparison — with identical payloads, direct and gateway match, and
+an in-process profiler put serialisation at 0 ms and first byte at 60 ms).
+
+**What it actually was.** Declaring tools cost a flat ~335 ms per turn, whether
+or not a tool was used, and no amount of repetition warmed it up. Trimming the
+schema by half bought 43 ms, so it was not token count.
+
+**Why.** rapid-mlx enables prefix caching by default, and it was doing nothing:
+
+```
+rapid_mlx_prefix_cache_hits_total     0
+rapid_mlx_prefix_cache_misses_total 351
+rapid_mlx_prefix_cache_tokens_saved    0
+```
+
+The features are switched on by `model_auto_config`, which keys off a **rapid-mlx
+alias**. We were serving `lmstudio-community/Qwen3.6-35B-A3B-MLX-8bit` — a raw
+HuggingFace path — so the profile never resolved, and neither the prefix cache
+nor TurboQuant KV compression ever engaged.
+
+Serving `qwen3.6-35b-8bit` instead resolves the profile, and the log says so:
+
+```
+Resolved alias profile ... turboquant_tier=k8v4_verified
+TurboQuant default: engine defaults to --kv-cache-turboquant k8v4
+MemoryAwarePrefixCache initialized: max_memory=11186.2MB, radix_index=on
+```
+
+| | raw path | alias |
+|---|---|---|
+| Tool turn TTFT | 468 ms, never improves | **179 ms** |
+| Plain chat TTFT | 133 ms | **77 ms** |
+| Prefix cache | 0 hits / 351 misses | **27 hits, 21,407 tokens saved** |
+| Gateway `tool_gap` | ~1300 ms | **~500 ms** |
+
+Tool calling is unaffected: 12/12 exact coordinates on the alias, same as before.
+
+**The lesson, and it is in CLAUDE.md now: serve by alias, never by path.** A raw
+path works, answers correctly, and quietly costs you every optimisation the
+server has. `rapid-mlx models` lists the aliases.
