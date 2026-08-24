@@ -104,3 +104,32 @@ describe("ToolCallAccumulator", () => {
 		assert.deepEqual(acc.finish()[0]?.args, {});
 	});
 });
+
+describe("reading tool names mid-stream", () => {
+	// The name arrives in the first delta and the arguments stream in
+	// afterwards, which is what lets a client be told a tool is running long
+	// before the call is complete. If names() waited for finish() the
+	// acknowledgement would land after the gap it exists to cover.
+	it("returns a name before its arguments have finished arriving", () => {
+		const acc = new ToolCallAccumulator();
+		acc.add([{ index: 0, id: "a", function: { name: "get_forecast" } }]);
+		assert.deepEqual(acc.names(), ["get_forecast"]);
+		acc.add([{ index: 0, function: { arguments: '{"lat' } }]);
+		assert.deepEqual(acc.names(), ["get_forecast"], "a name went missing");
+	});
+
+	it("skips a call that has an index but not yet a name", () => {
+		// Announcing an empty name would have the client say a tool is running
+		// without being able to say which.
+		const acc = new ToolCallAccumulator();
+		acc.add([{ index: 0, function: { arguments: "{}" } }]);
+		assert.deepEqual(acc.names(), []);
+	});
+
+	it("returns several tools in index order", () => {
+		const acc = new ToolCallAccumulator();
+		acc.add([{ index: 1, function: { name: "get_forecast" } }]);
+		acc.add([{ index: 0, function: { name: "get_current_time" } }]);
+		assert.deepEqual(acc.names(), ["get_current_time", "get_forecast"]);
+	});
+});

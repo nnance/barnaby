@@ -127,10 +127,23 @@ class LLM:
     async def stream_sentences(
         self, messages: list[dict], first_flush_chars: int = 24,
         on_first_token: Callable[[], None] | None = None,
+        on_tool: Callable[[str, list[str]], None] | None = None,
     ) -> AsyncIterator[tuple[str, bool]]:
         """Yields (sentence, is_first). The first chunk is flushed at the
         earliest clause boundary past `first_flush_chars` so audio starts
-        sooner; later chunks wait for real sentence boundaries."""
+        sooner; later chunks wait for real sentence boundaries.
+
+        `on_tool(phase, tools)` fires on the agent's `barnaby.tool_call`
+        frames — "started" when the model commits to a tool, "finished" when
+        the results are in. It is a callback rather than a second kind of
+        yielded value so that callers who do not care need no change, the same
+        way `on_first_token` works.
+
+        A tool turn is otherwise silence: round one produces no speakable text,
+        so without this the caller cannot tell a thinking robot from a hung
+        one. What to DO about it is the caller's business — the agent sends the
+        fact and stays out of presentation.
+        """
         payload: dict = {
             "model": self.model, "messages": messages, "stream": True,
             "max_tokens": self.max_tokens, "temperature": self.temperature,
@@ -152,8 +165,26 @@ class LLM:
                     break
                 try:
                     import json
-                    delta = json.loads(blob)["choices"][0].get("delta", {})
-                except (KeyError, IndexError, ValueError):
+                    frame = json.loads(blob)
+                except ValueError:
+                    continue
+                # The agent's tool-intent event, not a chat chunk. It carries
+                # no `choices` at all, so it must be handled before anything
+                # reaches for one — and anything unrecognised is skipped rather
+                # than assumed to be speech.
+                if frame.get("object") == "barnaby.tool_call":
+                    if on_tool is not None:
+                        try:
+                            on_tool(frame.get("phase") or "",
+                                    frame.get("tools") or [])
+                        except Exception:            # noqa: BLE001
+                            # An acknowledgement is a nicety. It must never be
+                            # the reason an answer does not arrive.
+                            log.exception("tool-intent callback failed")
+                    continue
+                try:
+                    delta = frame["choices"][0].get("delta", {})
+                except (KeyError, IndexError, TypeError):
                     continue
                 piece = delta.get("content") or ""
                 if not piece:

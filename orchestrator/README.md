@@ -143,10 +143,41 @@ numbers measured this way are real.
 | Answers something nobody asked | `follow_up_ms` down — the TV is landing an utterance in the follow-up window |
 | Have to re-wake him for every follow-up | `follow_up_ms` up, or check it is not 0 |
 | Answers as if mid-conversation, hours later | `session_idle_ms` down — history has not expired |
+| Chirps and then answers immediately after | `tool_ack_after_ms` up — the ack is firing on turns that were never slow |
+| Long unexplained silence on weather questions | `tool_ack_after_ms` down, or check the agent is sending tool events at all |
 
 Latency knobs are worth changing against data rather than impressions:
 `python -m barnaby --latency` summarises the recorded turns per stage, and
 every turn appends to `~/.cache/barnaby/turns.jsonl`.
+
+### Acknowledging a slow tool
+
+A tool turn is silent for ~1000 ms while the agent runs a round of inference,
+calls the tool, and prefills a second round. The agent streams a
+`barnaby.tool_call` event when that starts, and the Pi decides what to do:
+
+| Knob | Default | Notes |
+|---|---|---|
+| `tool_ack` | `chirp` | `chirp`, `speak`, or `none` |
+| `tool_ack_after_ms` | `700` | Wait this long, and cancel if the answer arrives first |
+| `tool_ack_text` | `Let me check.` | Only when `tool_ack` is `speak` |
+
+**`tool_ack_after_ms` is the important one.** The acknowledgement is armed on a
+timer and cancelled by the first token, so only turns that actually stall get
+acknowledged. An unconditional ack makes fast turns *worse* — a chirp followed
+200 ms later by the answer is noise, and it is the same mistake as the model
+narrating "let me check" a second before it answers.
+
+`chirp` is the default for the reason tier 0 chirps rather than narrating: it
+is instant and needs no network. `speak` costs a Kokoro round trip (~290 ms)
+inside the gap it is covering and must finish playing before the answer starts,
+so it turns an acknowledgement into a delay. Try it, but measure it.
+
+`--latency` gains `tool_started`, `tool_ack` and `tool_done` marks, which sit
+between `llm_sent` and `first_token` because that is exactly where the silence
+is. Without them a tool turn reports as one enormous TTFT with no way to tell
+whether the wait was the model deciding, the tool running, or round two
+prefilling.
 
 ## Things that will bite
 

@@ -370,6 +370,8 @@ async function agentStream(
 			rounds: result.rounds,
 			...(result.toolsRun.length > 0 && { tools: result.toolsRun.join(",") }),
 			...(result.toolGapMs !== undefined && { toolGapMs: result.toolGapMs }),
+			...(result.toolBytes > 0 && { toolBytes: result.toolBytes }),
+			...(result.ackMs !== undefined && { ackMs: result.ackMs }),
 		}),
 	});
 }

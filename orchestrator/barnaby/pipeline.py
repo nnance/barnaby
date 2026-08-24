@@ -307,12 +307,39 @@ class Pipeline:
 
         pending: list[asyncio.Task[np.ndarray]] = []
         reply: list[str] = []
+        ack: asyncio.Task | None = None
+
+        def on_tool(phase: str, tools: list[str]) -> None:
+            """The agent says a tool is running. Explain the pause — but only
+            if it turns out to be a pause worth explaining.
+
+            The acknowledgement is armed on a timer and cancelled by the first
+            token, so a fast tool turn stays silent. An unconditional ack makes
+            fast turns WORSE: a chirp and then the answer 200 ms later is
+            noise, and it is the same mistake as the model narrating "let me
+            check" a second before it answers.
+            """
+            nonlocal ack
+            if phase == "started":
+                turn.mark("tool_started")
+                log.info("tool running: %s", ", ".join(tools) or "unnamed")
+                if ack is None and self.cfg.behaviour.tool_ack != "none":
+                    ack = asyncio.create_task(self._tool_ack(turn))
+            elif phase == "finished":
+                turn.mark("tool_done")
+
         turn.mark("llm_sent")
 
         try:
             async for sentence, is_first in self.llm.stream_sentences(
-                    messages, on_first_token=lambda: turn.mark("first_token")):
+                    messages, on_first_token=lambda: turn.mark("first_token"),
+                    on_tool=on_tool):
                 if is_first:
+                    # The answer is here, so the pause is over. Anything still
+                    # waiting to acknowledge it is now late and unwelcome.
+                    if ack is not None:
+                        ack.cancel()
+                        ack = None
                     turn.mark("first_sentence")
                 reply.append(sentence)
                 pending.append(asyncio.create_task(self.tts.synth(sentence)))
@@ -320,6 +347,11 @@ class Pipeline:
         except Exception:                          # noqa: BLE001
             log.exception("LLM failed")
             await self.face.set_fault("offline")
+        finally:
+            # A turn that died mid-tool must not leave a chirp armed to fire
+            # into the next one.
+            if ack is not None:
+                ack.cancel()
 
         while pending:
             await self._drain(pending, turn, wait=True)
@@ -343,6 +375,37 @@ class Pipeline:
                 turn.mark("speaking")
                 await self.face.set_mood("happy")
             self.speaker.push(clip)
+
+    async def _tool_ack(self, turn: Turn) -> None:
+        """Acknowledge a tool that is taking a while. Cancelled if the answer
+        arrives first, which is the whole design — see `on_tool`.
+
+        Deliberately not spoken by default. A chirp is instant and needs no
+        network; TTS costs a round trip inside the gap it is covering and then
+        has to finish playing before the answer can start, which is how an
+        acknowledgement turns into a delay. Same reasoning as tier 0's chirp.
+        """
+        behaviour = self.cfg.behaviour
+        try:
+            await asyncio.sleep(behaviour.tool_ack_after_ms / 1000)
+            if behaviour.tool_ack == "speak":
+                clip = await self.tts.synth(behaviour.tool_ack_text)
+            else:
+                clip = chirp(self.speaker.rate)
+            # The answer may have arrived while TTS was running. Losing that
+            # race is the failure this whole timer exists to avoid, so check
+            # again at the last moment before making a sound.
+            if self.speaker.is_playing:
+                return
+            turn.mark("tool_ack")
+            log.info("acknowledged a slow tool (%s)", behaviour.tool_ack)
+            self.speaker.push(clip)
+            self.speaker.end_utterance()
+        except asyncio.CancelledError:
+            raise
+        except Exception:                          # noqa: BLE001
+            # Never let an acknowledgement break the turn it was decorating.
+            log.exception("tool acknowledgement failed")
 
     async def _speak_one(self, text: str, turn: Turn) -> None:
         clip = await self.tts.synth(text)

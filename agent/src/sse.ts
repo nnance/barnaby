@@ -117,6 +117,19 @@ export class ToolCallAccumulator {
 		return this.calls.size;
 	}
 
+	/**
+	 * Names of the calls seen so far, in index order, skipping any not yet
+	 * named. Safe to read mid-stream, which is the point: the name arrives in
+	 * the first delta and the arguments stream in afterwards, so a client can
+	 * be told what is running long before the call is complete.
+	 */
+	names(): string[] {
+		return [...this.calls.entries()]
+			.sort(([a], [b]) => a - b)
+			.map(([, call]) => call.name)
+			.filter((name) => name !== "");
+	}
+
 	/** The finished calls, with arguments parsed. Bad JSON yields {} rather
 	 * than throwing — the tool clamps its own inputs anyway. */
 	finish(): { id: string; name: string; args: Record<string, unknown> }[] {

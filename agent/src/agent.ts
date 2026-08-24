@@ -7,10 +7,15 @@
  * needs no change for tool calling to work.
  *
  * WHAT THIS COSTS. Round one produces no speakable text at all, so a tool turn
- * has nothing to say until round two starts: roughly 1.4 s of silence against a
- * 2 s budget. Nothing is emitted into that gap on purpose — measure how bad it
- * actually is before designing around it. `tool_gap_ms` in the log is the
+ * has nothing to say until round two starts. `tool_gap_ms` in the log is the
  * number to watch.
+ *
+ * No SPEECH is emitted into that gap — but the fact of it is. On the first
+ * tool_calls delta the client gets a `barnaby.tool_call` frame naming what is
+ * running, and another when the tools finish, so it can explain the pause in
+ * whatever way suits it: the Pi chirps, a web chat does nothing. Deciding to
+ * SAY something here would be presentation, and this server does not know what
+ * its caller is. See `toolFrame`.
  *
  * WHAT IT MUST NOT COST. A turn that uses no tool has to stay exactly as fast
  * as phase 1, so content frames are forwarded the instant they arrive rather
@@ -50,6 +55,13 @@ export interface AgentResult {
 	 * content token. Undefined when no tool ran. */
 	toolGapMs?: number;
 	bytes: number;
+	/** Bytes of tool-intent frames, apart from `bytes` so that stays a measure
+	 * of answer content and stays comparable with phase 1. */
+	toolBytes: number;
+	/** Turn start to the `started` frame, ms. How early the client learned a
+	 * tool was running — the number that says whether an acknowledgement lands
+	 * inside the gap or after it. Undefined when nothing was announced. */
+	ackMs?: number;
 }
 
 const encoder = new TextEncoder();
@@ -112,6 +124,38 @@ function contentFrame(text: string, model: string): Uint8Array {
 	);
 }
 
+/** The object type carrying tool intent. Deliberately not a chat chunk. */
+export const TOOL_EVENT = "barnaby.tool_call";
+
+/**
+ * Tell the client a tool is running, so it can explain the pause itself.
+ *
+ * WHY THIS IS NOT A CONTENT DELTA. A content delta is spoken by anything that
+ * receives it — there is no way to opt out, and a web chat would print "let me
+ * check" mid-answer. A distinct `object` is skipped by every OpenAI-compatible
+ * client, including the Pi's own `choices[0].delta.content` filter, so this is
+ * additive: a client that has never heard of it behaves exactly as before.
+ *
+ * WHY THE AGENT DOES NOT JUST SAY SOMETHING. What is happening is a fact and
+ * belongs here. How to react is presentation, and the agent cannot know whether
+ * its caller has a speaker, a screen, or neither — the same split that keeps
+ * spoken-answer guidance in the Pi's system prompt rather than this one. The Pi
+ * has a chirp and a face that cost nothing; a spoken acknowledgement costs a
+ * Kokoro round trip inside the very gap it is trying to cover.
+ *
+ * Arguments are never sent. The client has no use for them, and they carry the
+ * household's coordinates.
+ */
+function toolFrame(phase: "started" | "finished", tools: string[]): Uint8Array {
+	return encoder.encode(
+		`data: ${JSON.stringify({
+			object: TOOL_EVENT,
+			phase,
+			tools,
+		})}\n\n`,
+	);
+}
+
 /**
  * Run one turn to completion, streaming to `emit`.
  *
@@ -138,6 +182,14 @@ export async function runTurn(
 	let toolGapMs: number | undefined;
 	let dispatchedAt: number | undefined;
 	let nudged = false;
+	// Once per turn, spanning rounds: a second round asking for another tool is
+	// a pause the client has already been told about and is still waiting out.
+	let announced = false;
+	const startedAt = Date.now();
+	let ackMs: number | undefined;
+	// Counted apart from `bytes` so that stays a measure of answer content and
+	// stays comparable with phase 1's logs.
+	let toolBytes = 0;
 
 	for (let round = 1; round <= cfg.maxToolRounds; round++) {
 		// The last permitted round drops the tools entirely. Offering them
@@ -194,12 +246,33 @@ export async function runTurn(
 					if (choice?.finish_reason != null) finish = choice.finish_reason;
 					if (delta?.tool_calls !== undefined) {
 						accumulator.add(delta.tool_calls);
-						// Speak the moment the model commits to a tool, not when
-						// the round finishes. This is the whole point: waiting
-						// for the round to end costs ~2.3 s and puts the
-						// acknowledgement AFTER the silence it should have
-						// covered. The first tool_calls delta arrives far
-						// sooner, while the user is still expecting a reply.
+						// Announce the moment the model commits to a tool, not
+						// when the round finishes. Waiting for the round to end
+						// puts the acknowledgement AFTER the silence it should
+						// have covered.
+						//
+						// Measured 2026-08-24 over 12 live turns on the alias:
+						// the first tool_calls delta arrives at a median of
+						// 546 ms (250-971), and carries the tool NAME in that
+						// first delta — arguments stream afterwards. So this
+						// fires early enough to be worth having, which is what
+						// the older ~2500 ms figure said it would not be. That
+						// figure predated the alias fix.
+						//
+						// Once per turn, not once per call: two tools in one
+						// round is still one pause to explain. Names may still
+						// be empty here if a delta carries only an index, in
+						// which case the next one will do.
+						if (!announced) {
+							const names = accumulator.names();
+							if (names.length > 0) {
+								announced = true;
+								ackMs = Date.now() - startedAt;
+								const frame = toolFrame("started", names);
+								toolBytes += frame.length;
+								await emit(frame);
+							}
+						}
 					}
 
 					if (typeof delta?.content === "string" && delta.content !== "") {
@@ -327,6 +400,8 @@ export async function runTurn(
 				toolsRun,
 				...(toolGapMs !== undefined && { toolGapMs }),
 				bytes,
+				toolBytes,
+				...(ackMs !== undefined && { ackMs }),
 			};
 		}
 
@@ -393,6 +468,19 @@ export async function runTurn(
 			});
 		}
 
+		// Tools are done and round two is about to start. Say so, so a client
+		// running a "thinking" animation can stop it on an event rather than on
+		// a guess — and so a stuck tool is visible as a gap between started and
+		// finished rather than as undifferentiated silence.
+		//
+		// Only if a `started` went out: without one this would be the first the
+		// client had heard of any tool, which is worse than saying nothing.
+		if (announced && !signal.aborted) {
+			const frame = toolFrame("finished", toolsRun);
+			toolBytes += frame.length;
+			await emit(frame);
+		}
+
 		// The client may have gone while the tools ran. Starting another
 		// inference round for a socket nobody is reading is the exact leak the
 		// abort plumbing exists to prevent — and tools that ignore the signal
@@ -403,6 +491,8 @@ export async function runTurn(
 				toolsRun,
 				...(toolGapMs !== undefined && { toolGapMs }),
 				bytes,
+				toolBytes,
+				...(ackMs !== undefined && { ackMs }),
 			};
 		}
 
@@ -423,5 +513,7 @@ export async function runTurn(
 		toolsRun,
 		...(toolGapMs !== undefined && { toolGapMs }),
 		bytes,
+		toolBytes,
+		...(ackMs !== undefined && { ackMs }),
 	};
 }

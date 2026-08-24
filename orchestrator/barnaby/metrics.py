@@ -40,9 +40,17 @@ LOG_PATH = Path.home() / ".cache" / "barnaby" / "turns.jsonl"
 # at ~400 ms for a turn where he speaks for twelve seconds, which hid exactly
 # that: a follow-up window that opens only once he finishes is useless if
 # nothing reports how long finishing takes.
+# `tool_started` and `tool_done` bracket the agent's tool call, and they sit
+# between llm_sent and first_token because that is exactly where the silence
+# is: on a tool turn the first token is round TWO's. Without these the table
+# reports a tool turn as one enormous TTFT and cannot say whether the wait was
+# the model deciding, the tool running, or round two prefilling.
+# `tool_ack` is when we made a noise about it, and is absent on turns fast
+# enough that we never needed to.
 ORDER = [
     "wake", "endpoint", "asr_sent", "asr_done", "tier0_done",
-    "llm_sent", "first_token", "first_sentence", "speaking", "tts_done",
+    "llm_sent", "tool_started", "tool_ack", "tool_done",
+    "first_token", "first_sentence", "speaking", "tts_done",
     "playback_done", "done",
 ]
 

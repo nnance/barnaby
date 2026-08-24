@@ -99,6 +99,27 @@ class BehaviourCfg:
     # the session still resolves "what about tomorrow".
     session_idle_ms: int = 180_000   # ~3 min, matching sleep_after_frames
 
+    # What to do when the agent says a tool is running, which it does the
+    # moment the model commits to one — measured ~950 ms in, against a gap of
+    # ~1000 ms before the answer starts.
+    #
+    # "chirp" is the default for the same reason tier 0 chirps rather than
+    # narrating: it is instant, needs no network, and costs nothing. "speak"
+    # sends a line to TTS, which costs a Kokoro round trip (~290 ms for the
+    # first clip) inside the very gap it is covering, and then has to finish
+    # playing before the answer can start. "none" leaves only the face.
+    tool_ack: str = "chirp"          # chirp | speak | none
+    # Spoken only when tool_ack is "speak". Kept short for the reason above.
+    tool_ack_text: str = "Let me check."
+    # Wait this long after the tool starts before acknowledging, and cancel if
+    # the answer arrives first. THIS IS THE POINT: an unconditional ack makes
+    # fast turns worse — a chirp followed 200 ms later by the answer is noise.
+    # Only turns that actually stall get acknowledged.
+    #
+    # Measured gap is ~1000 ms, so 700 fires on a typical tool turn while
+    # staying silent on a fast one. Raise it if he chirps over himself.
+    tool_ack_after_ms: int = 700
+
 
 @dataclass
 class Config:
