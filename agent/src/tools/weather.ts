@@ -75,6 +75,16 @@ interface Response {
 /** One day of forecast, as data. */
 export interface ForecastDay {
 	date: string;
+	/**
+	 * The weekday, spelled out.
+	 *
+	 * The model cannot reliably work out that Friday is the 28th when today is
+	 * Sunday the 23rd — asked for Friday it returned Tuesday's numbers 4 times
+	 * in 6, with correct ISO dates in front of it, and adding today's date as
+	 * an anchor did not help. So it is not asked to: every row is labelled with
+	 * the day it actually is, and matching "Friday" to it needs no arithmetic.
+	 */
+	weekday: string;
 	condition: string;
 	weather_code: number;
 	temperature_max: number | null;
@@ -86,6 +96,22 @@ export interface ForecastResult {
 	latitude: number;
 	longitude: number;
 	timezone: string;
+	/**
+	 * Today's date at the location, so a weekday name can be resolved without
+	 * guessing.
+	 *
+	 * The model does not know what day it is and does not know that it does not
+	 * know: asked for Friday it returned Monday's, Tuesday's or Wednesday's
+	 * numbers, right 2 times in 6, while every date in this payload was
+	 * correct. It was mislabelling rows. Anchoring the array to a date the tool
+	 * worked out itself means it cannot do that without contradicting data it
+	 * was handed in the same breath.
+	 *
+	 * The tool resolves this, not the model — it already knows the timezone,
+	 * and asking the model for a date it might compute wrongly would put the
+	 * bug back on the input side.
+	 */
+	today: string;
 	temperature_unit: string;
 	days: ForecastDay[];
 }
@@ -93,6 +119,18 @@ export interface ForecastResult {
 export interface WeatherConfig {
 	/** Unit the forecast is requested in. A deployment choice, not a per-call one. */
 	unit: "fahrenheit" | "celsius";
+}
+
+/**
+ * The weekday for an ISO date, in the forecast's own timezone.
+ *
+ * Parsed as UTC noon rather than midnight: midnight in a zone behind UTC lands
+ * on the previous day, and every label comes out one off.
+ */
+function weekdayOf(iso: string, timeZone: string): string {
+	return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone }).format(
+		new Date(`${iso}T12:00:00Z`),
+	);
 }
 
 /** Reject values that are not coordinates at all. Not a judgment about place. */
@@ -164,15 +202,26 @@ export function weatherTool(cfg: WeatherConfig): Tool {
 			if (times.length === 0)
 				throw new Error("weather service returned no forecast");
 
+			// Open-Meteo returns dates in the location's own timezone, so today
+			// must be resolved in that zone too — at 7pm in Norman the server's
+			// idea of "today" may already be tomorrow's date in UTC.
+			const timezone = data.timezone ?? "UTC";
+			const today = new Intl.DateTimeFormat("en-CA", {
+				timeZone: timezone,
+				year: "numeric",
+				month: "2-digit",
+				day: "2-digit",
+			}).format(new Date());
+
 			const result: ForecastResult = {
 				latitude,
 				longitude,
-				// Dates are in the location's own timezone, so the model needs it
-				// to know which of them is "today".
-				timezone: data.timezone ?? "UTC",
+				today,
+				timezone,
 				temperature_unit: data.daily_units?.temperature_2m_max ?? cfg.unit,
 				days: times.map((date, i) => ({
 					date,
+					weekday: weekdayOf(date, timezone),
 					weather_code: daily?.weather_code?.[i] ?? -1,
 					condition: CONDITIONS[daily?.weather_code?.[i] ?? -1] ?? "unknown",
 					temperature_max: daily?.temperature_2m_max?.[i] ?? null,

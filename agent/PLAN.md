@@ -348,9 +348,40 @@ The second is worth noting as a general lesson: an emphatic, unusual description
 made the model *narrate the tool name aloud*. Plain wording behaves better even
 when it does not solve the problem.
 
-**The likely fix, not yet built.** Stop asking the model to map weekday names
-onto array positions at all. Give `get_forecast` an optional `date` parameter,
-so the model asks for `2026-08-28` rather than counting rows — and if it needs
-today's date to compute that, it has a reason to call the clock. The mismatch is
-between two tools' outputs, so the fix belongs at that seam rather than in more
-prompt wording.
+**The fix: label the rows.** Two attempts missed before the right one landed.
+
+A `start_date` parameter was tried and rejected — it put the arithmetic back on
+the model, which is the thing that was broken. Then `today` was added to the
+forecast output as an anchor, on the theory that the model only lacked a
+reference point. Measured: **2/6 correct before, 3/6 after** — noise. The payload
+already contained correct ISO dates and now contained today's date too, and the
+model still answered Friday with Tuesday's numbers.
+
+That ruled out the whole class of fix. It was never missing data; the model
+simply cannot reliably compute that Friday is the 28th when today is Sunday the
+23rd.
+
+So it is no longer asked to. **Every forecast day now carries its weekday**, and
+matching "Friday" to a row labelled `Friday` needs no arithmetic at all:
+
+```json
+{ "date": "2026-08-28", "weekday": "Friday", "temperature_max": 107.6 }
+```
+
+| | correct | mislabelled |
+|---|---|---|
+| ISO dates only | 2/6 | 4/6 |
+| plus `today` anchor | 3/6 | 3/6 |
+| **plus weekday labels** | **10/12** | **0/12** |
+
+The two misses are a different and much better failure: the model asked for too
+few days and then said "I don't have the forecast for Saturday" rather than
+inventing one. Nothing is mislabelled any more.
+
+`today` is kept. It did not fix this on its own, but it is correct data, and
+it is what tells the model which labelled row is the current one.
+
+**The lesson.** Three descriptions of the clock tool were tried before this, and
+none worked, because the problem was never that the model lacked the date — it
+was being asked to do arithmetic it is bad at. Moving the work into the tool
+output beat every attempt to describe the problem more emphatically.

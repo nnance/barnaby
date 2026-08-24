@@ -114,12 +114,68 @@ describe("weather tool output", () => {
 		assert.equal(result.timezone, "America/Chicago");
 	});
 
-	it("returns dates, not day names", async () => {
-		// "Tomorrow" versus "Tuesday" is phrasing, and phrasing is not ours.
+	it("anchors the array with today's date", async () => {
+		// The model does not know what day it is, and does not know that it
+		// does not know: asked for Friday it returned Monday's or Tuesday's
+		// numbers, right 2 times in 6, while every date here was correct. It
+		// was mislabelling rows. An anchor it did not have to compute means it
+		// cannot do that without contradicting the same payload.
+		const result = await forecast();
+		const expected = new Intl.DateTimeFormat("en-CA", {
+			timeZone: "America/Chicago",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+		}).format(new Date());
+		assert.equal(result.today, expected);
+		assert.match(result.today, /^\d{4}-\d{2}-\d{2}$/);
+	});
+
+	it("resolves today in the location's zone, not the server's", async () => {
+		// At 7pm in Norman the server's idea of today may already be
+		// tomorrow's date in UTC.
+		const result = await forecast();
+		assert.equal(result.timezone, "America/Chicago");
+		const utc = new Date().toISOString().slice(0, 10);
+		const local = result.today;
+		// Both are valid dates; the point is that `today` follows the payload's
+		// timezone rather than being lifted from the server clock.
+		assert.ok(Math.abs(Date.parse(local) - Date.parse(utc)) <= 86_400_000);
+	});
+
+	it("labels every day with its weekday", async () => {
+		// The fix for the bug that anchoring with today's date did not solve.
+		// The model could not work out that Friday is the 28th when today is
+		// Sunday the 23rd — it answered with Tuesday's numbers 4 times in 6,
+		// with correct ISO dates in front of it. Labelled rows removed the
+		// arithmetic: 10/12 correct afterwards, and the two misses were it
+		// asking for too few days and saying so rather than inventing an
+		// answer.
+		const result = await forecast({ days: 4 });
+		assert.deepEqual(
+			result.days.map((d) => d.weekday),
+			["Sunday", "Monday", "Tuesday", "Wednesday"],
+		);
+	});
+
+	it("keeps ISO dates alongside the weekday", async () => {
+		// The weekday is for matching; the date is still the fact.
 		const result = await forecast({ days: 2 });
 		for (const day of result.days) {
 			assert.match(day.date, /^\d{4}-\d{2}-\d{2}$/);
 		}
+	});
+
+	it("labels the weekday correctly in zones behind UTC", async () => {
+		// Parsing an ISO date at midnight rather than noon lands on the
+		// previous day in any zone behind UTC, and every label comes out one
+		// off. The fake reports America/Chicago.
+		const result = await forecast({ days: 1 });
+		const expected = new Intl.DateTimeFormat("en-US", {
+			weekday: "long",
+			timeZone: "America/Chicago",
+		}).format(new Date(`${result.days[0]?.date}T12:00:00Z`));
+		assert.equal(result.days[0]?.weekday, expected);
 	});
 });
 
