@@ -1,3 +1,18 @@
+> **Archived, and superseded.** This was written while the LLM was
+> `Qwen3.8-27B-4bit-MTP-MLX`, to work out whether to move to 8-bit. The answer
+> arrived from a different direction: the model is now `qwen3.6-35b-8bit`, a
+> mixture-of-experts that is 8-bit *and* faster, so the trade-off agonised over
+> here — more precision at the cost of speculative decoding — turned out not to
+> be the trade-off on offer.
+>
+> Two things in it are still true and are recorded in `CLAUDE.md`, which is
+> where to read them: there is no drop-in 8-bit MTP build (the 451 MB repo is a
+> draft head, not a model), and serving by rapid-mlx **alias** rather than
+> HuggingFace path is what enables the prefix cache. The second one mattered far
+> more than anything in this file — it was worth ~300 ms a turn.
+>
+> Kept for the measurements and the reasoning. History, not instruction.
+
 # Upgrading the LLM from 4-bit
 
 Backlog item 6 wants 8-bit for **tool-call reliability**, not latency — which

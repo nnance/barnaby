@@ -78,8 +78,13 @@
    has a real number to move — and serve it on 8003 **alongside** 4-bit rather
    than replacing it. The gateway is already the routing seam, so trying it
    costs no Pi change and reverting is deleting a route.
-   `agent/MODEL-NOTES.md` has the sizes and the procedure; `agent/bench.mjs`
-   runs the comparison.
+   **Done 2026-08-23, and not the way this describes.** The model is now
+   `qwen3.6-35b-8bit`, a mixture-of-experts that is 8-bit *and* faster than the
+   4-bit dense model it replaced — so the trade-off agonised over above was
+   never the one on offer. Tool decisions went 2287 → 530 ms, ordinary TTFT
+   424 → 171 ms, throughput 37.8 → 82.2 tok/s. The bigger lesson was unrelated
+   to precision: serve by rapid-mlx **alias**, never by HuggingFace path, or the
+   prefix cache never engages. `agent/bench.mjs` still runs the comparison.
 6. **Camera + face tracking** when the Wide arrives — emits `look` on the face
    channel, which the renderer already consumes.
 7. **ESP32 firmware.**
