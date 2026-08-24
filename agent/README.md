@@ -3,7 +3,8 @@
 Sits between the Pi and rapid-mlx on the Mac Studio. Phase 1 is a passthrough
 and its whole job is to be invisible. Tool calling lands here in phase 2.
 
-See `PLAN.md` for why it exists and what phase 2 looks like.
+Everything about how it works is here. The plan it was built from is archived
+in `docs/plans/archive/` — history and measurements, not instruction.
 
 ## Rolling back, first, because you will want it
 

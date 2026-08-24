@@ -1,3 +1,9 @@
+> **Archived.** This is the plan for phases 1 and 2 of the agent server, kept
+> for the reasoning and the measurements behind decisions that are now shipped —
+> including several fixes that were tried and reverted, with the numbers that
+> killed them. It is history, not instruction: it describes what was true while
+> it was being built. For how the server works now, read `agent/README.md`.
+
 # The Node agent server — plan
 
 Backlog item 3. A TypeScript server on the Mac Studio that sits between the Pi

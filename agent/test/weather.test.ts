@@ -197,6 +197,12 @@ describe("weather tool arguments", () => {
 		await assert.rejects(() => run({ latitude: "somewhere" }), /latitude/);
 	});
 
+	it("rejects a fractional day count rather than truncating it", async () => {
+		// The schema says integer; silently turning 1.9 into 1 is the
+		// validation layer disagreeing with its own contract.
+		await assert.rejects(() => run({ days: 1.9 }), /whole number/);
+	});
+
 	it("rejects a day count the API cannot serve", async () => {
 		// 16 is Open-Meteo's own ceiling, not an opinion of ours.
 		await assert.rejects(() => run({ days: 0 }), /days/);

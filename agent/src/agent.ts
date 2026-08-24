@@ -83,6 +83,21 @@ export class UpstreamError extends Error {
  * Only used to decide whether a tool-less round deserves one retry, so a false
  * positive costs an extra round and a false negative costs nothing.
  */
+/**
+ * How much may be held before it is certainly an answer, not a promise.
+ *
+ * "Let me check the forecast for you." is 34 characters. Past this the model is
+ * answering, and holding any longer would cost real time-to-first-audio.
+ */
+const PROMISE_MAX = 60;
+
+/** Spoken when a round produces no content at all, so a turn never ends mute. */
+const NOTHING_TO_SAY = "Sorry, I could not work that one out.";
+
+/** A promise starts this way. Anything else is an answer and must not be held. */
+const PROMISE_PREFIX =
+	/^\s*(let me|i'?ll|i will|i'?m going to|one moment|hold on|checking|let'?s|sure[,!.]?\s*(let me|i'?ll)?)/i;
+
 const PROMISE =
 	/\b(let me|i'?ll|i will|going to|one moment|hold on|checking|let's)\b.*\b(check|look|see|fetch|find|grab|pull)\b/i;
 
@@ -142,6 +157,8 @@ export async function runTurn(
 			cfg,
 			"/chat/completions",
 			Buffer.from(JSON.stringify(payload)),
+			{},
+			signal,
 		);
 		const { response, abort } = upstream;
 
@@ -158,6 +175,9 @@ export async function runTurn(
 		// anything it says is held until we know.
 		const canCallTool = specs.length > 0 && !last;
 		const held: string[] = [];
+		// Set once this round's content is known to be a real answer rather
+		// than a false start, after which nothing more is buffered.
+		let releasedHold = false;
 		let sawContent = false;
 		let finish: string | null = null;
 		const assistantText: string[] = [];
@@ -202,16 +222,33 @@ export async function runTurn(
 						// worse than useless — it delays the answer to say
 						// something the user has already finished waiting for.
 						//
-						// So it is buffered. If this round turns out to be a
-						// tool call, it is dropped and replaced by ACK spoken at
-						// dispatch. If no tool is called, it is released
-						// unchanged, so ordinary turns are untouched.
-						// Held only while a nudge is still possible, so a
-						// false-start promise can be dropped rather than
-						// spoken. Once nudged, speak immediately — holding
-						// again would delay the real answer for nothing.
-						if (canCallTool && !nudged) {
+						// Hold ONLY while this still looks like a false start.
+						//
+						// The point of holding is to drop a "let me check that
+						// for you" that never becomes a tool call. But a real
+						// answer must not be held: measured, buffering a plain
+						// answer delivered all 400 tokens in an 8 ms burst
+						// after 6 s of silence, which destroys the
+						// sentence-pipelined TTS phase 1 exists to protect.
+						//
+						// So the buffer is released the moment what has been
+						// said stops reading like a promise. A promise is short
+						// and formulaic; anything longer is the answer itself.
+						if (canCallTool && !nudged && !releasedHold) {
 							held.push(event.raw);
+							const soFar = assistantText.join("");
+							if (soFar.length > PROMISE_MAX || !PROMISE_PREFIX.test(soFar)) {
+								// Not a false start. Flush and stream from here
+								// on, so this turn is byte-identical to one
+								// that never buffered.
+								releasedHold = true;
+								for (const raw of held) {
+									const frame = encoder.encode(`${raw}\n\n`);
+									bytes += frame.length;
+									await emit(frame);
+								}
+								held.length = 0;
+							}
 						} else {
 							const raw = encoder.encode(`${event.raw}\n\n`);
 							bytes += raw.length;
@@ -272,6 +309,19 @@ export async function runTurn(
 		}
 
 		if (calls.length === 0 || signal.aborted) {
+			// A round that said nothing reaches the Pi as a valid 200 stream
+			// with no content — silence it cannot explain, which is the exact
+			// failure the error handling exists to prevent. It cannot be caught
+			// by the ceiling below: the last round strips `tools`, so calls is
+			// always empty there and this return always fires first.
+			if (!sawContent && !signal.aborted && bytes === 0) {
+				const frame = contentFrame(NOTHING_TO_SAY, model);
+				bytes += frame.length;
+				await emit(frame);
+				log.info(
+					"model produced no content — said so rather than ending silent",
+				);
+			}
 			return {
 				rounds: round,
 				toolsRun,
@@ -307,7 +357,13 @@ export async function runTurn(
 		// including ones needing no tool. See PLAN.md.
 
 		for (const call of calls) {
-			const tool = registry.get(call.name);
+			// Not offered means not reachable. The last round strips `tools`
+			// from the payload, so a tool_calls delta arriving there is the
+			// model ignoring the request, a server bug, or something steering
+			// it — and the microphone is an attack surface. Refuse rather than
+			// run it.
+			const offered = specs.length > 0 && !last;
+			const tool = offered ? registry.get(call.name) : undefined;
 			let result: string;
 			if (tool === undefined) {
 				// Not in the allowlist. Tell the model plainly rather than
@@ -335,6 +391,19 @@ export async function runTurn(
 				name: call.name,
 				content: result,
 			});
+		}
+
+		// The client may have gone while the tools ran. Starting another
+		// inference round for a socket nobody is reading is the exact leak the
+		// abort plumbing exists to prevent — and tools that ignore the signal
+		// (the clock is synchronous) return normally regardless.
+		if (signal.aborted) {
+			return {
+				rounds: round,
+				toolsRun,
+				...(toolGapMs !== undefined && { toolGapMs }),
+				bytes,
+			};
 		}
 
 		if (finish !== null && finish !== "tool_calls") {

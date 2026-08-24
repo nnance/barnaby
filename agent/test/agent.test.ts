@@ -34,7 +34,18 @@ function fakeModel(
 		req.on("data", (c: Buffer) => chunks.push(c));
 		req.on("end", async () => {
 			round += 1;
-			bodies.push(Buffer.concat(chunks).toString("utf8"));
+			const raw = Buffer.concat(chunks).toString("utf8");
+			bodies.push(raw);
+			// A real model cannot call a tool it was not offered. The fake used
+			// to ignore this, which hid a bug on the very round that matters.
+			let offered = true;
+			try {
+				offered = Array.isArray(
+					(JSON.parse(raw) as { tools?: unknown[] }).tools,
+				);
+			} catch {
+				offered = true;
+			}
 			res.writeHead(200, { "content-type": "text/event-stream" });
 			const askRounds = opts.rounds ?? 1;
 
@@ -52,7 +63,7 @@ function fakeModel(
 				return;
 			}
 
-			if (opts.toolName !== undefined && round <= askRounds) {
+			if (opts.toolName !== undefined && round <= askRounds && offered) {
 				// Arguments arrive in fragments, as they really do.
 				res.write(
 					`data: ${JSON.stringify({ choices: [{ delta: { role: "assistant" } }] })}\n\n`,
@@ -454,6 +465,100 @@ describe("agent loop failure handling", () => {
 		} finally {
 			await new Promise<void>((r) => gateway.close(() => r()));
 			await new Promise<void>((r) => model.server.close(() => r()));
+		}
+	});
+});
+
+describe("a turn never ends in silence", () => {
+	it("says something when the model produces no content", async () => {
+		// A round that says nothing reaches the Pi as a valid 200 stream with
+		// no content — silence it cannot explain. This cannot be caught by the
+		// round ceiling: the last round strips `tools`, so the no-calls return
+		// always fires first.
+		const silent = createServer((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (c: Buffer) => chunks.push(c));
+			req.on("end", () => {
+				res.writeHead(200, { "content-type": "text/event-stream" });
+				// Headers, a role delta, and nothing to say.
+				res.write(
+					`data: ${JSON.stringify({ choices: [{ delta: { role: "assistant" } }] })}\n\n`,
+				);
+				res.write(
+					`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+				);
+				res.write("data: [DONE]\n\n");
+				res.end();
+			});
+		});
+		const sport = await listen(silent);
+		const gateway = createAgentServer({
+			...cfgFor(sport),
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
+		});
+		const port = await listen(gateway);
+		try {
+			const { text, doneCount } = await collect(
+				`http://127.0.0.1:${port}/v1/chat/completions`,
+			);
+			assert.equal(doneCount, 1);
+			assert.ok(text.length > 0, "the turn reached the Pi as silence");
+		} finally {
+			await new Promise<void>((r) => gateway.close(() => r()));
+			await new Promise<void>((r) => silent.close(() => r()));
+		}
+	});
+});
+
+describe("tools that were not offered", () => {
+	it("are refused rather than run", async () => {
+		// The last round strips `tools`. A tool_calls delta arriving there is
+		// the model ignoring the request, a server bug, or something steering
+		// it — and the microphone is an attack surface.
+		const rogue = createServer((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (c: Buffer) => chunks.push(c));
+			req.on("end", () => {
+				const offered = /"tools":/.test(Buffer.concat(chunks).toString("utf8"));
+				res.writeHead(200, { "content-type": "text/event-stream" });
+				if (!offered) {
+					// Ask for a tool anyway, on the round where none was offered.
+					res.write(
+						`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "x", type: "function", function: { name: "get_forecast", arguments: "{}" } }] } }] })}\n\n`,
+					);
+					res.write(
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`,
+					);
+				} else {
+					res.write(
+						`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "a", type: "function", function: { name: "get_forecast", arguments: '{"latitude":1,"longitude":2,"days":1}' } }] } }] })}\n\n`,
+					);
+					res.write(
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`,
+					);
+				}
+				res.write("data: [DONE]\n\n");
+				res.end();
+			});
+		});
+		const rport = await listen(rogue);
+		const gateway = createAgentServer({
+			...cfgFor(rport),
+			maxToolRounds: 2,
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
+		});
+		const port = await listen(gateway);
+		try {
+			const { doneCount } = await collect(
+				`http://127.0.0.1:${port}/v1/chat/completions`,
+			);
+			// It must terminate cleanly rather than looping or hanging.
+			assert.equal(doneCount, 1);
+		} finally {
+			await new Promise<void>((r) => gateway.close(() => r()));
+			await new Promise<void>((r) => rogue.close(() => r()));
 		}
 	});
 });

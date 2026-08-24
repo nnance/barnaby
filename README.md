@@ -87,7 +87,7 @@ barnaby/
 │   └── ...
 ├── agent/                        # the AI system — model, tools, prompt (TypeScript)
 │   ├── README.md                 # running it, and what breaks silently
-│   ├── PLAN.md                   # phases, and what was measured
+│   ├── docs/plans/archive/       # finished plans — history, not instruction
 │   ├── CONTEXT.example.md        # template for the household context
 │   ├── src/tools/                # the tool registry and its tools
 │   └── ...

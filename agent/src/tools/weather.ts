@@ -180,11 +180,13 @@ export function weatherTool(cfg: WeatherConfig): Tool {
 
 			// Open-Meteo's own ceiling. A hard limit of the API, not an opinion
 			// about how far ahead anyone should be asking.
-			const requested = Number(args.days);
-			if (!Number.isFinite(requested) || requested < 1 || requested > 16) {
+			// The schema says integer and the message says whole number, so
+			// silently truncating 1.9 to 1 would be the validation layer
+			// disagreeing with its own contract.
+			const days = Number(args.days);
+			if (!Number.isInteger(days) || days < 1 || days > 16) {
 				throw new Error("days must be a whole number between 1 and 16");
 			}
-			const days = Math.trunc(requested);
 
 			const url =
 				`${ENDPOINT}?latitude=${latitude}&longitude=${longitude}` +
