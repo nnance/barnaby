@@ -2,3 +2,7 @@ node_modules/
 
 # Personal context: names, home location. Never commit this.
 CONTEXT.md
+
+# Scratch debugging, never committed.
+.chk/
+.prof/

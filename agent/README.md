@@ -49,11 +49,10 @@ All optional. The defaults assume this server and rapid-mlx on the same Mac.
 | `BARNABY_AGENT_HOST` | `0.0.0.0` | The Pi is a different machine — the same trap rapid-mlx has |
 | `BARNABY_UPSTREAM_URL` | `http://127.0.0.1:8001/v1` | Set this when developing off-Studio |
 | `BARNABY_UPSTREAM_TIMEOUT_MS` | `55000` | Under the Pi's 60 s, so we fail first and say why |
-| `BARNABY_CONTEXT` | `agent/CONTEXT.md` | Personal context — see below. Missing is fine; he knows nothing about the household and offers no tools |
+| `BARNABY_CONTEXT` | `agent/CONTEXT.md` | Personal context — see below. **Where the household lives is written here, not configured.** Missing is fine; he then knows nothing about the household and offers no tools |
 | `BARNABY_TEMP_UNIT` | `fahrenheit` | `celsius` to switch |
 | `BARNABY_MODEL` | *(caller's)* | **The agent picks the model, not the Pi.** Tools only work with a model that calls them reliably, so the tool layer and the model choice are one decision. Unset passes the caller's model through, which is phase 1 behaviour |
-| `BARNABY_LATITUDE` / `BARNABY_LONGITUDE` | *(none)* | Where "the weather" means. Both must be set or the tool is not offered at all and the gateway is a plain passthrough |
-| `BARNABY_PLACE` | `home` | Named only so an answer can say where it is talking about |
+| `BARNABY_TIMEZONE` | *(the system's)* | Only for a robot in a different zone from the agent. `Intl` resolves the host's zone correctly on its own, including under launchd |
 
 ## Personal context, and where the system prompt lives
 
