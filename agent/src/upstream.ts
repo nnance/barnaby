@@ -27,9 +27,22 @@ export async function post(
 	path: string,
 	body: Buffer,
 	headers: Record<string, string> = {},
+	signal?: AbortSignal,
 ): Promise<UpstreamResult> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
+
+	// Chain the caller's abort. Without this a client that hangs up mid-turn
+	// only stops the relay once the NEXT chunk happens to arrive — and if
+	// rapid-mlx stalls between tokens, it keeps generating for a socket nobody
+	// is reading until the 55 s timeout. The comment above claimed this was
+	// happening long before the parameter existed.
+	const onAbort = (): void => controller.abort();
+	if (signal !== undefined) {
+		if (signal.aborted) controller.abort();
+		else signal.addEventListener("abort", onAbort, { once: true });
+	}
+	const detach = (): void => signal?.removeEventListener("abort", onAbort);
 
 	try {
 		const response = await fetch(`${cfg.upstream}${path}`, {
@@ -46,11 +59,13 @@ export async function post(
 			response,
 			abort: () => {
 				clearTimeout(timer);
+				detach();
 				controller.abort();
 			},
 		};
 	} catch (err) {
 		clearTimeout(timer);
+		detach();
 		throw err;
 	}
 }

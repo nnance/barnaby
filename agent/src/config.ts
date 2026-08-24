@@ -5,6 +5,10 @@
  * Mac, so upstream is 127.0.0.1. Nothing here needs setting to run it.
  */
 
+import { join } from "node:path";
+import { loadContext } from "./context.ts";
+import type { WeatherConfig } from "./tools/weather.ts";
+
 export interface Config {
 	/** Port we listen on. Clear of the 8000-8002 rapid-mlx block on purpose. */
 	port: number;
@@ -16,6 +20,40 @@ export interface Config {
 	/** Upstream request timeout. The Pi gives up at 60 s, so we must fail
 	 * first — otherwise the Pi reports a timeout and we report nothing. */
 	timeoutMs: number;
+	/**
+	 * Where "the weather" means. Undefined disables the tool entirely rather
+	 * than guessing — a forecast for the wrong place is worse than none.
+	 */
+	weather: WeatherConfig;
+	/**
+	 * Who Barnaby is talking to and where they live, from CONTEXT.md. Plain
+	 * prose, appended to the system prompt. Anything a tool needs is written
+	 * into a sentence and the model passes it as a tool argument.
+	 */
+	context: string;
+	/**
+	 * The household's timezone, for resolving "tomorrow" and "Friday". Defaults
+	 * to the Mac's own zone, which is right when the robot is in the same
+	 * house as the agent and wrong the moment it is not.
+	 */
+	timeZone: string;
+	/**
+	 * The model to ask for, overriding whatever the caller sent.
+	 *
+	 * The agent owns this, not the Pi. Tools only work with a model that calls
+	 * them reliably, so the tool layer and the model choice are one decision —
+	 * and splitting them across two machines means a model swap needs edits in
+	 * two places, where missing one leaves every turn failing. Undefined passes
+	 * the caller's model through unchanged, which is phase 1's behaviour.
+	 */
+	model?: string | undefined;
+	/**
+	 * How many tool rounds one turn may take before the loop gives up and lets
+	 * the model answer with what it has. A ceiling, not a target: each round is
+	 * a full inference, so this is the difference between a slow answer and a
+	 * turn that never ends.
+	 */
+	maxToolRounds: number;
 }
 
 function int(name: string, fallback: number): number {
@@ -29,6 +67,12 @@ function int(name: string, fallback: number): number {
 }
 
 export function load(): Config {
+	// Beside the source by default: it is the agent's file, not the repo's, and
+	// BARNABY_CONTEXT can point elsewhere.
+	const context = loadContext(
+		process.env.BARNABY_CONTEXT ??
+			join(import.meta.dirname, "..", "CONTEXT.md"),
+	);
 	return {
 		port: int("BARNABY_AGENT_PORT", 8100),
 		host: process.env.BARNABY_AGENT_HOST ?? "0.0.0.0",
@@ -36,5 +80,23 @@ export function load(): Config {
 			process.env.BARNABY_UPSTREAM_URL ?? "http://127.0.0.1:8001/v1"
 		).replace(/\/$/, ""),
 		timeoutMs: int("BARNABY_UPSTREAM_TIMEOUT_MS", 55_000),
+		model: process.env.BARNABY_MODEL,
+		context,
+		timeZone:
+			process.env.BARNABY_TIMEZONE ??
+			Intl.DateTimeFormat().resolvedOptions().timeZone,
+		weather: weatherConfig(),
+		maxToolRounds: int("BARNABY_MAX_TOOL_ROUNDS", 3),
+	};
+}
+
+/**
+ * The weather tool needs no location any more — the model supplies coordinates
+ * per call from CONTEXT.md. Only the unit is a deployment choice.
+ */
+function weatherConfig(): WeatherConfig {
+	return {
+		unit:
+			process.env.BARNABY_TEMP_UNIT === "celsius" ? "celsius" : "fahrenheit",
 	};
 }

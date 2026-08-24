@@ -24,18 +24,28 @@
 	<array>
 		<!-- Absolute paths: launchd does not read your shell profile, so a
 		     version-managed `node` on PATH will not be found. `which node`. -->
-		<string>/usr/local/bin/node</string>
-		<string>/Users/CHANGEME/Developer/robots/barnaby/agent/src/main.ts</string>
+		<string>/opt/homebrew/bin/node</string>
+		<string>/Users/nicknance/Developer/robots/barnaby/agent/src/main.ts</string>
 	</array>
 
 	<key>WorkingDirectory</key>
-	<string>/Users/CHANGEME/Developer/robots/barnaby/agent</string>
+	<string>/Users/nicknance/Developer/robots/barnaby/agent</string>
 
 	<key>EnvironmentVariables</key>
 	<dict>
 		<!-- Same machine as rapid-mlx, so loopback. -->
 		<key>BARNABY_UPSTREAM_URL</key>
 		<string>http://127.0.0.1:8001/v1</string>
+		<!-- The model is the agent's decision, not the caller's: tools only
+		     work with a model that calls them reliably. Serve it by rapid-mlx
+		     ALIAS, never by HuggingFace path — the alias is what enables the
+		     prefix cache and KV compression, worth ~300 ms a turn. -->
+		<key>BARNABY_MODEL</key>
+		<string>qwen3.6-35b-8bit</string>
+		<!-- Where the household lives is NOT configured here. It is prose in
+		     agent/CONTEXT.md, which is gitignored, and the model passes the
+		     coordinates to tools from its own context. Putting them in this
+		     file would commit a home address to a public repo. -->
 	</dict>
 
 	<key>RunAtLoad</key>

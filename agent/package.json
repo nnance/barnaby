@@ -11,7 +11,8 @@
 		"lint": "biome lint",
 		"lint:fix": "biome lint --fix",
 		"format": "biome format --write",
-		"test": "node --test test/*.test.ts"
+		"test": "node --test test/*.test.ts",
+		"bench": "node scripts/bench.mjs"
 	},
 	"devEngines": {
 		"packageManager": {

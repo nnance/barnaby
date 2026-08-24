@@ -20,6 +20,13 @@ export interface TurnLog {
 	error?: string | undefined;
 	/** Set when the Pi hung up mid-stream — barge-in, or a session ending. */
 	aborted?: boolean | undefined;
+	/** Inference rounds this turn took. More than one means a tool ran. */
+	rounds?: number | undefined;
+	/** Tools actually executed, comma-separated. */
+	tools?: string | undefined;
+	/** Silence a tool turn cost, ms — the number that decides whether the gap
+	 * needs filling. */
+	toolGapMs?: number | undefined;
 }
 
 function ts(): string {
@@ -33,6 +40,11 @@ export function turn(entry: TurnLog): void {
 	if (entry.ttftMs !== undefined) parts.push(`ttft=${entry.ttftMs}ms`);
 	if (entry.totalMs !== undefined) parts.push(`total=${entry.totalMs}ms`);
 	if (entry.bytes !== undefined) parts.push(`bytes=${entry.bytes}`);
+	if (entry.rounds !== undefined && entry.rounds > 1)
+		parts.push(`rounds=${entry.rounds}`);
+	if (entry.tools !== undefined) parts.push(`tools=${entry.tools}`);
+	if (entry.toolGapMs !== undefined)
+		parts.push(`tool_gap=${entry.toolGapMs}ms`);
 	if (entry.aborted) parts.push("aborted");
 	if (entry.error !== undefined) parts.push(`error=${entry.error}`);
 	console.log(parts.join(" "));

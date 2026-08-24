@@ -44,7 +44,7 @@ Mac command lines — **`--host 0.0.0.0` and `--no-think` are both required:**
 
 ```bash
 rapid-mlx serve whisper-large-v3-turbo --port 8000 --host 0.0.0.0
-rapid-mlx serve qwen3.8-27b-4bit       --port 8001 --host 0.0.0.0 --no-think
+rapid-mlx serve qwen3.6-35b-8bit --port 8001 --host 0.0.0.0 --no-think
 rapid-mlx serve kokoro                 --port 8002 --host 0.0.0.0
 ```
 
@@ -87,8 +87,14 @@ required — the default derives the socket host from whoever served the page.
 The gateway between the Pi and rapid-mlx, and the future home of tool calling.
 Node 23+ strips types natively, so there is **no build step**: `pnpm start`
 runs `src/main.ts` directly. `src/server.ts` routes + SSE plumbing ·
-`src/upstream.ts` the only place an upstream URL is built · `bench.mjs` TTFT and
-tok/s against any model · `PLAN.md` phases · `MODEL-NOTES.md` the 8-bit question.
+`src/upstream.ts` the only place an upstream URL is built · `pnpm bench` TTFT
+and tok/s against any model.
+
+**Archived docs are history, not instruction.** Anything under a `docs/**/archive/`
+directory records what was true while something was being built, including
+decisions since reversed. Do not read it for how the system works now, and do
+not act on it — the READMEs are the current truth. Read it only to answer "why
+was this done this way", or when explicitly asked.
 
 **Design docs** — `parts-audit.md`, `pi-setup-guide.md`, `wiring-guide.md`,
 `robot-form-study.html` (interactive 3D form + expression study).
@@ -316,8 +322,12 @@ identity, ESP32, CAD.
 | The journal is volatile | `/var/log/journal` does not exist, so `Storage=auto` keeps everything in `/run` and a reboot loses it. `sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal` fixes it, and needs a password |
 | Deploying to the Pi | `./deploy.sh` — rsyncs and restarts the service. It is a **user** unit, so `systemctl --user`, never sudo (`admin` needs a password for sudo, which is why it is not a system unit). `journalctl --user-unit barnaby -f` for the log |
 | `HA_TOKEN` | Put it in `~/barnaby/barnaby.env`, read by the unit's `EnvironmentFile`. A shell `export` does not survive a reboot, and unset silently disables tier 0 rather than erroring |
+| **Serve models by rapid-mlx alias, never by HuggingFace path** | The alias is what triggers `model_auto_config` — TurboQuant KV compression and, critically, the **prefix cache**. Served by raw path, the prefix cache logged 351 lookups and **0 hits**, so every turn reprocessed the whole prompt and tool schema. By alias: tool-turn TTFT 468 → 179 ms, plain chat 133 → 77 ms. `rapid-mlx models` lists them |
+| The system prompt has two owners | The agent owns identity, household context and safety — the same whoever asks. The **client** owns presentation: spoken aloud, no markdown, answer length, how to say a number. The agent cannot know whether its caller is a speaker or a web chat, so it appends the caller's system message rather than replacing it |
+| The agent server picks the model, not the Pi | `BARNABY_MODEL` overrides whatever the Pi sends. Tools only work with a model that calls them reliably, so tools and model are one decision — when they were split, switching models needed edits on two machines and missing one 404'd every turn |
+| Node strips types, it does not compile them | So `enum`, `namespace` and constructor parameter properties (`constructor(readonly x: number)`) fail **at runtime**, and `tsc --noEmit` passes them happily. Plain field declarations plus assignment in the constructor body. `pnpm test` is what catches it. **Not a permanent rule** — `tsx` (a devDependency and transpile step, not a runtime dependency) lifts it whenever the friction earns the build step; `agent/README.md` records what would justify that |
 | Agent server abort must hook `res`, not `req` | `req` emits `close` as soon as the request body is read — *before* the first token — so hooking it there fires on every healthy turn and never on a real disconnect, and rapid-mlx keeps generating into a dead socket. `res` closes only when the socket actually goes |
-| There is no drop-in 8-bit MTP model | `mlx-community/Qwen3.8-27B-MTP-8bit` is 451 MB — the MTP **draft head**, not a model. Real 8-bit is 29.5 GB and non-MTP, so upgrading costs +13.4 GB *and* speculative decoding at once. See `agent/MODEL-NOTES.md` |
+| There is no drop-in 8-bit MTP model | `mlx-community/Qwen3.8-27B-MTP-8bit` is 451 MB — the MTP **draft head**, not a model. Real 8-bit is 29.5 GB and non-MTP, so upgrading costs +13.4 GB *and* speculative decoding at once. Moot now: the model is `qwen3.6-35b-8bit`, an MoE that is 8-bit *and* faster |
 | Thinking is already off server-side | `reasoning_parser: null`, `default_reasoning_level: "none"`. So a dropped `chat_template_kwargs` would **not** show up as `<think>` tags — behaviour cannot detect that regression, only a byte-level assertion on the forwarded body can |
 | face `check-fit` was unrunnable | `package.json` pointed at `scripts/check-fit.ts`; the file is `src/check-fit.ts`. Fixed 2026-08-22 and wired into `build`, so the geometry regression actually gates it now |
 
