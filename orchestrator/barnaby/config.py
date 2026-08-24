@@ -113,7 +113,11 @@ class BehaviourCfg:
     # and must finish playing before the answer starts; it is said once and
     # then repeats as chirps, because a repeated sentence is narration.
     # "none" disables the sound and leaves only the face.
-    tool_ack: str = "chirp"          # chirp | speak | none
+    # "hold" is the IVR pattern: a soft tone playing CONTINUOUSLY until the
+    # answer starts, so there is never any silence to misread as a hang. It is
+    # the most reassuring and also the most intrusive — it is a sound in your
+    # kitchen for the whole wait, so try it before assuming you want it.
+    tool_ack: str = "hold"           # hold | chirp | speak | none
     # Spoken only when tool_ack is "speak", and only the first time.
     tool_ack_text: str = "Let me check."
     # Wait this long before acknowledging, and cancel if the answer arrives
@@ -126,7 +130,17 @@ class BehaviourCfg:
     # that reliably does. Raise it toward 1500 to go back to acknowledging
     # only the genuinely slow turns.
     tool_ack_after_ms: int = 700
+    # How long each hold-tone segment is, when tool_ack is "hold". Segments
+    # tile seamlessly; one is queued at a time so cancelling never leaves more
+    # than this much tone to drain before the answer plays.
+    #
+    # 2000 matches the bubble pattern in `hold_tone`, whose last bubble starts
+    # at 1.70 s. Shortening this TRUNCATES the pattern rather than speeding it
+    # up — at 1000 you would hear only the first four bubbles and then a jump
+    # back to the start. Change the pattern, not this, to retime the bubbles.
+    tool_ack_segment_ms: int = 2000
     # Chirp again every this many ms while still waiting. 0 fires once only.
+    # Ignored when tool_ack is "hold", which is continuous by definition.
     #
     # The case for repeating: after one chirp, silence is indistinguishable
     # from having crashed. The case against: a sound every two seconds on a

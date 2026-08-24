@@ -310,18 +310,32 @@ class Pipeline:
         ack: asyncio.Task | None = None
 
         def stop_ack() -> None:
-            """The answer has begun, so stop saying we are working on it."""
+            """Real audio is about to play, so stop filling the wait.
+
+            The trigger is a clip reaching the speaker, not a token arriving —
+            see `first_token` for why the difference matters.
+            """
             nonlocal ack
             if ack is not None:
                 ack.cancel()
                 ack = None
+        # `_drain` calls this the instant the first clip is pushed, which is
+        # the earliest moment the wait is genuinely over.
+        self._stop_ack = stop_ack
 
         def first_token() -> None:
-            # Cancel on the first TOKEN, not the first sentence. The sentence
-            # is ~150 ms later — buffering to a clause boundary — and every one
-            # of those milliseconds is a chance to chirp over the answer.
+            # NOT a cancel point, deliberately.
+            #
+            # It was, and it was wrong: on a tool turn the model narrates in
+            # round one ("let me check the forecast"), and the agent HOLDS that
+            # text and usually drops it — so those tokens are never spoken. The
+            # ack was dying at ~570 ms on words the user would never hear,
+            # leaving the rest of the wait silent. Measured: first_token 569 ms,
+            # tool_started 952 ms, actual audio 3771 ms.
+            #
+            # A token is not a sound. The only honest signal that the wait is
+            # over is audio reaching the speaker, which is `_drain`.
             turn.mark("first_token")
-            stop_ack()
 
         def on_tool(phase: str, tools: list[str]) -> None:
             """The agent says a tool is running.
@@ -341,7 +355,8 @@ class Pipeline:
 
         turn.mark("llm_sent")
 
-        # Armed BEFORE the request goes out, and cancelled by the first token.
+        # Armed BEFORE the request goes out, and cancelled when real audio
+        # first reaches the speaker (in `_drain`).
         #
         # It used to be armed by the tool event, which meant it could only ever
         # explain a tool gap — and a plain turn that stalled said nothing at
@@ -359,10 +374,11 @@ class Pipeline:
                     messages, on_first_token=first_token,
                     on_tool=on_tool):
                 if is_first:
-                    # Belt and braces: on_first_token is the real cancel, but a
-                    # sentence arriving without one having fired must not leave
-                    # a chirp armed to land on top of the answer.
-                    stop_ack()
+                    # NOT a cancel point either: a sentence has been segmented
+                    # but not yet synthesised, and TTS can take seconds. This
+                    # turn measured first_sentence -> speaking at 2542 ms, all
+                    # of which the user would have spent in silence. `_drain`
+                    # cancels, when there is audio.
                     turn.mark("first_sentence")
                 reply.append(sentence)
                 pending.append(asyncio.create_task(self.tts.synth(sentence)))
@@ -371,9 +387,10 @@ class Pipeline:
             log.exception("LLM failed")
             await self.face.set_fault("offline")
         finally:
-            # A turn that died must not leave a chirp armed to fire into the
-            # next one, or into the follow-up window.
+            # A turn that died must not leave a tone playing into the next one,
+            # or into the follow-up window.
             stop_ack()
+            self._stop_ack = None
 
         while pending:
             await self._drain(pending, turn, wait=True)
@@ -393,6 +410,14 @@ class Pipeline:
             except Exception:                      # noqa: BLE001
                 log.exception("TTS failed — skipping a sentence")
                 continue
+            # Real audio exists now, so stop filling the wait. This is the
+            # cancel point rather than the first token because a token is not
+            # a sound: on a tool turn round one's narration is held by the
+            # agent and usually dropped, so cancelling there killed the tone
+            # seconds before anything was actually audible.
+            stop = getattr(self, "_stop_ack", None)
+            if stop is not None:
+                stop()
             if not self.speaker.is_playing:
                 turn.mark("speaking")
                 await self.face.set_mood("happy")
@@ -418,8 +443,14 @@ class Pipeline:
         acknowledgement turns into a delay. Same reasoning as tier 0's chirp.
         """
         behaviour = self.cfg.behaviour
+        rate = self.speaker.rate
         try:
             await asyncio.sleep(behaviour.tool_ack_after_ms / 1000)
+
+            if behaviour.tool_ack == "hold":
+                await self._hold_tone(turn)
+                return
+
             n = 0
             while True:
                 if behaviour.tool_ack == "speak" and n == 0:
@@ -427,7 +458,7 @@ class Pipeline:
                     # and narration is what the chirp exists to avoid.
                     clip = await self.tts.synth(behaviour.tool_ack_text)
                 else:
-                    clip = chirp(self.speaker.rate)
+                    clip = chirp(rate)
                 # The answer may have arrived while TTS was running, or while
                 # we slept. Losing that race is the failure this timer exists
                 # to avoid, so check at the last moment before making a sound.
@@ -448,11 +479,101 @@ class Pipeline:
             # Never let an acknowledgement break the turn it was decorating.
             log.exception("tool acknowledgement failed")
 
+    async def _hold_tone(self, turn: Turn) -> None:
+        """Play a continuous hold tone until cancelled — the IVR pattern.
+
+        One segment is queued at a time, and the next is not pushed until the
+        last has nearly finished. That is what makes this safe to cancel: the
+        queue never holds tone that would have to play before the answer could,
+        so stopping is just "stop pushing" and the tail is one segment at most.
+
+        It deliberately does NOT call `speaker.interrupt()` to cut that tail.
+        Interrupt drops the whole queue, and by the time the answer arrives its
+        first clip may already be in it — cutting the tone would take the first
+        sentence with it. A tone that overlaps the first word by a fraction of
+        a second is a far smaller problem than an answer that never plays.
+        """
+        seg_ms = self.cfg.behaviour.tool_ack_segment_ms
+        turn.mark("tool_ack")
+        log.info("holding (tone) until the answer starts")
+        phase = 0.0
+        while True:
+            # NOTE: there is deliberately no `if speaker.is_playing: return`
+            # here, though the chirp path has one. It cannot work for a tone:
+            # `is_playing` is true because THIS loop is playing, so the guard
+            # fires on its own output and the tone stops after one segment —
+            # which is exactly the "no tone at all" symptom. Cancellation from
+            # `_drain` is the only stop signal, and it is a reliable one.
+            self.speaker.push(hold_tone(self.speaker.rate, seg_ms, phase))
+            self.speaker.end_utterance()
+            # Carry the sine's phase so the next segment abuts this one without
+            # a click. 440 Hz over seg_ms seconds, wrapped.
+            phase = (phase + 2 * np.pi * 440.0 * (seg_ms / 1000)) % (2 * np.pi)
+            # Wake slightly before the segment ends, so the next one is queued
+            # while this is still playing and the tone stays unbroken. Too
+            # early and segments pile up in the queue; this keeps at most one
+            # waiting behind the one playing.
+            await asyncio.sleep(max(0.05, (seg_ms - 60) / 1000))
+
     async def _speak_one(self, text: str, turn: Turn) -> None:
         clip = await self.tts.synth(text)
         turn.mark("speaking")
         self.speaker.push(clip)
         self.speaker.end_utterance()
+
+
+# The bubbles in one hold-tone segment: (start seconds, base Hz).
+#
+# Deliberately uneven. Evenly spaced blips read as a machine ticking; uneven
+# ones read as something bubbling, which is the whole point. Chosen by ear
+# against a set of candidates — see docs/plans for the ones that lost.
+_BUBBLES = (
+    (0.04, 210.0), (0.26, 250.0), (0.50, 225.0), (0.72, 270.0),
+    (0.96, 215.0), (1.20, 255.0), (1.44, 235.0), (1.70, 265.0),
+)
+# How long one bubble lasts, and how far its pitch rises over that time. The
+# rise is what makes it a bubble rather than a beep: 2.6 means it ends at 3.6x
+# its starting pitch, which is the "bloop" of something surfacing.
+_BUBBLE_WIDTH_S = 0.16
+_BUBBLE_SWEEP = 2.6
+
+
+def hold_tone(rate: int, ms: int = 2000, phase: float = 0.0,
+              level: float = 0.09) -> np.ndarray:
+    """Bubbles, played while Barnaby is thinking. An acknowledgement tone.
+
+    Meant to be played back-to-back for as long as the wait lasts. It tiles
+    without a click for a simpler reason than the old sine did: every bubble
+    begins and ends at silence inside the segment, so the segment's own edges
+    are already zero and `phase` is accepted only for signature compatibility.
+
+    Quiet on purpose — it sits under the room rather than announcing itself. A
+    hold tone that demands attention is worse than silence, and this one plays
+    for the whole wait rather than once.
+
+    What it replaced: a 440 Hz sine pulsing hard on and off, which read as a
+    telephone hold beep and was actively annoying. The lesson worth keeping is
+    that the on/off chop was most of the problem — a continuous or overlapping
+    texture is far easier to sit next to than a repeating beep.
+    """
+    n = int(rate * ms / 1000)
+    t = np.arange(n, dtype=np.float32) / rate
+    dur = ms / 1000
+    out = np.zeros(n, dtype=np.float32)
+    for start, f0 in _BUBBLES:
+        if start >= dur:
+            continue
+        mask = (t >= start) & (t < start + _BUBBLE_WIDTH_S)
+        if not mask.any():
+            continue
+        local = t[mask] - start
+        # Pitch rises across the bubble: the "bloop".
+        freq = f0 * (1 + _BUBBLE_SWEEP * local / _BUBBLE_WIDTH_S)
+        # sin^2 rather than sin^3: softer than a click, but articulated enough
+        # that the bubbles stay distinct instead of blurring into a hum.
+        env = np.sin(np.pi * local / _BUBBLE_WIDTH_S) ** 2
+        out[mask] += (env * np.sin(2 * np.pi * freq * local)).astype("float32")
+    return (level * out).astype("float32")
 
 
 def chirp(rate: int, ms: int = 180) -> np.ndarray:
