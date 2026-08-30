@@ -418,7 +418,17 @@ class Pipeline:
             stop = getattr(self, "_stop_ack", None)
             if stop is not None:
                 stop()
-            if not self.speaker.is_playing:
+            # "First real audio of this turn?" — asked of the turn, not of the
+            # speaker. `is_playing` used to mean "an earlier sentence of this
+            # same answer is still going", which was the same question back
+            # when nothing else could have played first. The acknowledgement
+            # broke that: it pushes bubbles *before* sentence one, so
+            # `is_playing` is already true when the real speech arrives, and
+            # the guard silently swallowed both the mark and the mood for the
+            # whole turn. Symptom was a face stuck on `curious` through the
+            # entire answer, and every acknowledged turn logging "no audio
+            # produced" while audio played perfectly well.
+            if "speaking" not in turn.marks:
                 turn.mark("speaking")
                 await self.face.set_mood("happy")
             self.speaker.push(clip)
