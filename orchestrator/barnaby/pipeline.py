@@ -73,6 +73,10 @@ class Pipeline:
         self.ha = ha
         self.history: list[dict] = []
         self._idle_frames = 0
+        # Set by _answer when the user talked over him. The turn loop reads it
+        # to start listening immediately rather than waiting out the follow-up
+        # window — someone who interrupts is mid-sentence, not waiting.
+        self.interrupted = False
         self._open_frames = 0        # open-mic trigger, used when wake is None
         self._last_turn: float | None = None   # perf_counter of the last turn
 
@@ -84,16 +88,16 @@ class Pipeline:
             frame = await self.mic.queue.get()
 
             if self.speaker.is_playing:
-                # Barge-in only works when playback goes through the array, so
-                # its echo canceller has a reference to subtract. On a separate
-                # output device he will hear himself and cut himself off.
-                if not self.cfg.audio.barge_in_enabled:
-                    continue
-                if self.barge.feed(frame):
-                    log.info("barge-in")
-                    self.speaker.interrupt()
-                    self.barge.reset()
-                    await self._turn(preroll=self.mic.preroll())
+                # Barge-in is NOT handled here. It used to be, and it could
+                # never work: while Barnaby speaks, control is inside `_answer`
+                # awaiting the LLM and TTS, so this loop does not run until he
+                # has already finished. `_watch_for_barge_in` runs concurrently
+                # with playback instead, which is the only place that can see
+                # the microphone at the time it matters.
+                #
+                # Audio arriving here during playback is therefore leftovers —
+                # the acknowledgement bubbles, or the tail of a clip after an
+                # interrupt. Drop it.
                 continue
 
             if self._triggered(frame):
@@ -241,11 +245,23 @@ class Pipeline:
                 return
 
             await self.face.set_mood("curious")   # thinking
+            self.interrupted = False
             tier0 = await self._try_tier0(text, turn)
             if not tier0:
                 await self._answer(text, turn)
             turn.report(self.cfg.targets)
             self._last_turn = time.perf_counter()
+
+            if self.interrupted:
+                # Straight back to recording, no follow-up window. Someone who
+                # talks over him is already mid-sentence, and _watch_for_barge_in
+                # only fires after barge_in_ms of speech — so the first words
+                # are in the mic's ring buffer, not in the queue. The preroll is
+                # what makes them part of the turn instead of lost.
+                await self.face.set_mood("listening")
+                preroll = self.mic.preroll()
+                woken = False
+                continue
 
             if tier0 and not self.cfg.behaviour.follow_up_after_tier0:
                 await self.face.set_mood("neutral")
@@ -369,6 +385,12 @@ class Pipeline:
         if self.cfg.behaviour.tool_ack != "none":
             ack = asyncio.create_task(self._tool_ack(turn))
 
+        # Watch the microphone *while* he speaks. Started here rather than in
+        # run(), which cannot see the mic until this coroutine returns.
+        barge: asyncio.Task[bool] | None = None
+        if self.cfg.audio.barge_in_enabled:
+            barge = asyncio.create_task(self._watch_for_barge_in())
+
         try:
             async for sentence, is_first in self.llm.stream_sentences(
                     messages, on_first_token=first_token,
@@ -393,14 +415,95 @@ class Pipeline:
             self._stop_ack = None
 
         while pending:
+            if barge is not None and barge.done() and barge.result():
+                # Interrupted. Drop the clips still queued behind the one that
+                # was cut off — synthesising the rest of an answer nobody is
+                # listening to only delays the reply to what they just said.
+                for p in pending:
+                    p.cancel()
+                pending.clear()
+                break
             await self._drain(pending, turn, wait=True)
         self.speaker.end_utterance()
         turn.mark("tts_done")
+
+        # Wait for the audio, not for the queue. `tts_done` fires when the last
+        # clip is *pushed*, which on a short answer is ~17 ms after the first —
+        # while the speaker still has nine seconds to play. Cancelling the
+        # watcher here (as this did) killed it before there was anything left
+        # to interrupt, which is the second reason barge-in never fired.
+        interrupted = False
+        if barge is not None:
+            drained = asyncio.create_task(self.speaker.wait_until_idle())
+            done, _ = await asyncio.wait({barge, drained},
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if barge in done:
+                interrupted = barge.result()
+                drained.cancel()
+            else:
+                barge.cancel()
+            for t in (barge, drained):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+        else:
+            await self.speaker.wait_until_idle()
+        self.interrupted = interrupted
 
         turn.reply = " ".join(reply)
         if turn.reply:
             self.history += [{"role": "user", "content": text},
                              {"role": "assistant", "content": turn.reply}]
+
+    async def _watch_for_barge_in(self) -> bool:
+        """Listen for the user talking over Barnaby, while he is talking.
+
+        This has to be a concurrent task rather than a check in `run()`, which
+        is where it lived and why barge-in never fired: during a turn, control
+        is inside `_answer` awaiting the LLM and TTS, so `run()`'s loop is not
+        reading the microphone at all until he has finished speaking. The check
+        was real, the config was on, the AEC worked — and the code could only
+        ever run once the thing it was meant to interrupt was already over.
+
+        Measured on this hardware, the array's echo canceller is doing the hard
+        part: 0 of 31 frames read as speech while Barnaby talks at full volume
+        (mic peak 0.005), and 21 of 31 the moment a person speaks over him.
+
+        Returns True if it interrupted, so the caller can abandon the rest of
+        the answer rather than resuming a reply nobody is listening to.
+        """
+        self.barge.reset()
+        self.mic.flush()          # discard what queued up before he started
+        started = False
+        try:
+            while True:
+                frame = await self.mic.queue.get()
+                if self.speaker.is_playing:
+                    # First audio of the turn. Anything queued before this is
+                    # the room while he was still thinking, not an interruption.
+                    if not started:
+                        started = True
+                        self.barge.reset()
+                        self.mic.flush()
+                        continue
+                elif started:
+                    return False      # he finished on his own
+                else:
+                    # He has not started speaking yet. This is the gap between
+                    # the LLM request and the first TTS clip — seconds, on a
+                    # tool turn — and exiting here is what made barge-in look
+                    # broken: the task was created before the first push, saw
+                    # is_playing False on its very first frame, and returned
+                    # before there was anything to interrupt.
+                    continue
+                if self.barge.feed(frame):
+                    log.info("barge-in")
+                    self.speaker.interrupt()
+                    self.barge.reset()
+                    return True
+        except asyncio.CancelledError:
+            raise
 
     async def _drain(self, pending: list, turn: Turn, wait: bool = False) -> None:
         """Push finished clips to the speaker, in sentence order."""
