@@ -1,0 +1,63 @@
+[Unit]
+# The kiosk browser that draws Barnaby's face on the round panel.
+#
+# cog (WPE WebKit) rather than Chromium: a real embedded runtime with no
+# desktop, no window manager, no tab bar. It renders straight to DRM/KMS, so
+# there is no X or Wayland session to start first.
+#
+# Ordering: the face survives the orchestrator being down (it keeps its last
+# state and reconnects with backoff), so this does NOT require barnaby.service.
+# It does require the static server, or cog starts on a connection refused and
+# shows nothing.
+Description=Barnaby face kiosk
+Requires=barnaby-face-server.service
+After=barnaby-face-server.service
+# A panel that is unplugged, or a mode the driver rejects, makes cog exit
+# immediately and repeatedly. Five failures in a minute means the display is
+# wrong, not that another restart will help.
+#
+# These belong in [Unit], NOT [Service]. systemd silently ignores them under
+# [Service] — it logs "Unknown key ... ignoring" once and then rate limiting
+# simply never happens. That is how this unit managed 20 restarts in a row on
+# a missing binary while claiming a burst limit of 5.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+# COG_PLATFORM=drm is what makes it render to the panel with no compositor.
+# Without it cog looks for a Wayland display, finds none, and exits.
+Environment=COG_PLATFORM=drm
+# The seat owns the DRM master and the input devices. Without a seat cog
+# cannot take the display even running as the console user.
+Environment=WPE_DRM_SEAT=seat0
+# No --set-fullscreen: it does not exist in cog 0.18 (it was in older docs and
+# fails the unit outright with "Unknown option"). Under the DRM platform cog
+# fills the display anyway, so there is nothing to replace it with.
+#
+# -b black matters on a round panel: the default background is white, so
+# without this the panel flashes a white disc before the face paints, and any
+# margin outside the drawing shows white rather than disappearing into the
+# bezel.
+# -O renderer=gles is NOT optional, and the failure it prevents is ugly.
+#
+# On a Pi 5 the display controller and the GPU are separate DRM devices:
+# /dev/dri/card1 is vc4 (display, no render node), /dev/dri/card0 + renderD128
+# is v3d (the GPU). Cog picks card1 because that is where the display is,
+# finds no render node on it, and silently falls back to its `modeset`
+# software renderer — which draws the page as smeared horizontal streaks:
+# roughly the right colours, no recognisable shapes.
+#
+# The only hint in the log is "Renderer 'modeset' does not support rotation 0",
+# which reads like harmless noise and is not. With this flag the GLES renderer
+# initialises and that line disappears.
+#
+# Do not diagnose this from /sys/class/graphics/fb0 — that is the *text
+# console* framebuffer (16 bpp, RGB565), not cog's, which is AR24/32-bit. It
+# sent this debugging chasing a pixel-format problem that did not exist.
+ExecStart=/usr/bin/cog --platform=drm -O renderer=gles -b black http://127.0.0.1:8080/?dev=0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

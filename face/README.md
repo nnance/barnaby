@@ -1,20 +1,20 @@
 # barnaby-face
 
 Barnaby's face. TypeScript → Canvas 2D, rendered at 480×480 on a 2.1″ round IPS
-panel over micro HDMI.
+panel over HDMI (micro at the Pi end).
 
 The face is a **pure view**. It owns no policy — the orchestrator decides that a
 fault outranks a mood, that sleep follows idle, when to look at someone. This
 draws what it's told, and keeps drawing when it's told nothing.
 
 ```bash
-npm install
-npm run dev          # http://localhost:5273  — dev tools on automatically
-npm run check:fit    # geometry regression — must pass before build
-npm run build        # → dist/, ~8 kB JS
+pnpm install
+pnpm dev             # http://localhost:5273  — dev tools on automatically
+pnpm check:fit       # geometry regression — must pass before build
+pnpm build           # → dist/, ~8 kB JS
 ```
 
-Dev tools are on by default under `npm run dev` and stripped from a production
+Dev tools are on by default under `pnpm dev` and stripped from a production
 build. **Move your pointer** and Barnaby's eyes follow it — that's what the face
 tracker will drive. Number keys `1`–`0` switch states. A body-glow swatch shows
 the colour the ESP32 would be sent.
@@ -27,7 +27,7 @@ The active area is a **53 mm circle — 26.5 mm of usable radius**. Anything
 beyond that is physically not there. All geometry is authored in millimetres in
 `src/layout.ts` and `src/expressions.ts`, and `MM` converts to pixels.
 
-`npm run check:fit` samples the **actual drawn outline** — rounded-corner arcs
+`pnpm check:fit` samples the **actual drawn outline** — rounded-corner arcs
 on the eyes, rotated brow corners, worst-case idle drift and tracked gaze
 pushing the same direction at once — and fails if anything exceeds the radius.
 This is not decorative. Two expressions were silently clipping before it
@@ -80,28 +80,30 @@ while the eyes are shut. Same cut-hiding trick animators use. Everything else
 
 ## Deploying to the Pi
 
-Serve `dist/` locally and point a kiosk browser at it.
-
 ```bash
-npm run build
-rsync -a dist/ barnaby.local:/opt/barnaby/face/
+./deploy-face.sh              # build, rsync, restart the kiosk
+./deploy-face.sh --install    # first time: also installs cog and the units
+./deploy-face.sh --logs       # ... then follow the kiosk log
 ```
 
-Use **`cog`** (WPE WebKit) rather than Chromium — it's a real embedded runtime
-with no desktop, no tab bar, and a much smaller footprint on an appliance:
+From the repo root, and the sibling of `./deploy.sh` — same conventions, same
+reason. It builds here and ships `dist/`; the Pi never runs pnpm, tsc or vite.
+Because `build` runs `check:fit`, a layout change that would clip off the round
+panel fails on your machine rather than deploying geometry the display cannot
+show.
 
-```bash
-sudo apt install cog
-cog --set-fullscreen=true http://127.0.0.1:8080/
-```
+Two **user** units (`systemctl --user`, never sudo): `barnaby-face-server`
+serves `dist/` on `127.0.0.1:8080`, and `barnaby-kiosk` runs **`cog`** (WPE
+WebKit) straight to DRM/KMS — a real embedded runtime, no X, no desktop, no tab
+bar. The kiosk deliberately does **not** depend on `barnaby.service`: the face
+survives the orchestrator restarting, so ordering it behind the orchestrator
+would only blank the panel exactly when you want to see a face.
 
-Two things to get right on the Pi:
-
-- **Kill the boot console on this output**, or Barnaby spends his first 30
-  seconds displaying kernel messages. Add `console=tty3 quiet logo.nologo
-  vt.global_cursor_default=0` to `cmdline.txt`.
-- **480×480 is a non-standard mode.** Expect to set it explicitly, e.g.
-  `video=HDMI-A-1:480x480@60` in `cmdline.txt`.
+**`--install` does not set the video mode.** 480×480 is non-standard, lives in
+`cmdline.txt`, and needs sudo and a reboot. That, plus which HDMI port, which
+cable, and why the panel needs its own USB power, is
+**[docs/display-setup.md](../docs/display-setup.md)** — do it once before any
+of this will show anything.
 
 ## Layout
 
@@ -111,5 +113,5 @@ src/layout.ts        shared mm constants. Edit proportions here.
 src/face.ts          canvas renderer, blink and drift timing.
 src/transport.ts     websocket + runtime validation.
 src/main.ts          wiring + dev panel.
-scripts/check-fit.ts geometry regression check.
+src/check-fit.ts     geometry regression check.
 ```

@@ -125,7 +125,7 @@ and impossible to fix after printing.
 | M.2 HAT+ and 256 GB NVMe SSD | SD cards die on 24/7 appliances | 45 |
 | **Camera Module 3 Wide** | Passive presence detection | 35 |
 | 300 mm 22→15-pin FPC cable | Included one won't reach through the yaw joint | 8 |
-| **Flat ribbon micro HDMI cable** | Moulded cable is too stiff for the gimbal | 10 |
+| **Flat ribbon HDMI cable** | Moulded cable is too stiff for the gimbal. Pi end is micro (Type D); check whether the panel board is mini (C) or micro (D) before ordering | 10 |
 | **2.1″ round IPS 480×480, micro HDMI** (B0DZ2ZKP7B) | The face | 30 |
 | **ESP32-S3-DevKitC-1** | Motion, body glow, touch, IMU | 8 |
 | Waveshare Bus Servo Adapter (A) | Half-duplex TTL for the ESP32 | 8 |
