@@ -27,6 +27,13 @@ export interface TurnLog {
 	/** Silence a tool turn cost, ms — the number that decides whether the gap
 	 * needs filling. */
 	toolGapMs?: number | undefined;
+	/** Bytes of tool-intent frames, apart from `bytes` so that stays a measure
+	 * of answer content and stays comparable with phase 1. */
+	toolBytes?: number | undefined;
+	/** Request start to the `started` frame, ms — how early the client learned
+	 * a tool was running. The number that decides whether an acknowledgement
+	 * lands inside the gap or after it. */
+	ackMs?: number | undefined;
 }
 
 function ts(): string {
@@ -45,6 +52,8 @@ export function turn(entry: TurnLog): void {
 	if (entry.tools !== undefined) parts.push(`tools=${entry.tools}`);
 	if (entry.toolGapMs !== undefined)
 		parts.push(`tool_gap=${entry.toolGapMs}ms`);
+	if (entry.ackMs !== undefined) parts.push(`ack=${entry.ackMs}ms`);
+	if (entry.toolBytes !== undefined) parts.push(`tool_bytes=${entry.toolBytes}`);
 	if (entry.aborted) parts.push("aborted");
 	if (entry.error !== undefined) parts.push(`error=${entry.error}`);
 	console.log(parts.join(" "));

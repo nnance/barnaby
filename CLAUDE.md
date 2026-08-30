@@ -176,8 +176,25 @@ physical unplug/replug of the array.** Which of the two did it is untested, but
 that is the thing to try first if it ever goes missing again — and it retires
 the I2S-firmware theory, since the board plainly speaks USB Audio Class when it
 comes up at all. `input_device` is now `"reSpeaker"`, which restores
-beamforming and far-field. Output is still the Waveshare card, so AEC has no
-reference and `barge_in_enabled` stays `false`.
+beamforming and far-field.
+
+**Output moved to the array on 2026-08-26** — the speaker now hangs off the
+XVF3800 and the Waveshare card is unplugged. That gives the echo canceller a
+reference to subtract, so `barge_in_enabled` is now `true` and `playback_rate`
+is `16000` (the array's only playback rate).
+
+Barge-in is on and **survived its first real turn without false-triggering** —
+a full weather answer played with no `barge-in` in the log, i.e. the AEC did
+subtract his own voice. What is still unmeasured is the other half: whether a
+*deliberate* interruption is detected reliably, and at what distance. The
+false-positive failure announces itself — Barnaby cuts himself off mid-sentence
+and the log says `barge-in` on a turn nobody started. Raise `barge_in_ms`
+before disabling it.
+
+**The speaker is a single mono driver** on the array's speaker output, two
+leads. The USB descriptor advertising 2 channels is just how the interface is
+declared; the XVF3800 handles the mixdown, and sounddevice accepts both 1- and
+2-channel output. Nothing needs duplicating to stereo.
 
 The likely mechanism is USB enumeration, not the array: the XVF3800 draws
 meaningfully at boot, and a device that loses its handshake stays invisible
@@ -303,7 +320,8 @@ identity, ESP32, CAD.
 | XVF3800 | **2 channels, not many** — the DSP beamforms on-board and exposes no raw capsules over USB. Use ch0 (~7 dB hotter than ch1). Descriptor is the authority here; the usual XMOS "ch0 beamformed, rest raw" lore does not match this firmware |
 | `--devices` shows the array as `0 in / 2 out` | Its capture stream is already open — i.e. Barnaby is running. Looks identical to the device failing to enumerate, right after a period when it genuinely was. `fuser -v /dev/snd/pcmC3D0c` names the holder; `/proc/asound/card3/pcm0c/sub0/status` shows RUNNING |
 | XVF3800 went missing, then came back | It failed to enumerate for a long stretch, then appeared on 2026-08-22 after **a Pi reboot plus an unplug/replug**. Try exactly that before suspecting firmware — the long detour into "it must be the I2S variant" cost real time and was wrong |
-| `playback_rate` | 24000 on the USB card, **16000** on the array. Mismatch = wrong pitch and speed |
+| **Unplugging the array requires a service restart** | The running process holds a capture stream that dies with the unplug and is **never reopened**. Barnaby stays `active`, logs nothing, and simply stops hearing — no error, no crash. Seen 2026-08-24: log silent for 11 h, `/proc/asound/card3/pcm0c/sub0/status` read `closed` with no holder in `fuser`. `systemctl --user restart barnaby` fixes it. Tempting wrong diagnosis is "the port changed" — the card number is stable, and `input_device` matches by *name* anyway, so renumbering could not break it. Check the pcm status before touching config |
+| `playback_rate` | **16000** on the array — its playback endpoint advertises that one rate and nothing else (`/proc/asound/card0/stream0`). 24000 was for the retired Waveshare card. Mismatch = wrong pitch and speed |
 | Barge-in | Only works with playback routed through the array — its AEC needs the reference. Currently `false` |
 | Speaker connector | Board is JST PH 2.0; speakers are XH 2.5. Pigtail needed. Board connector is **top-entry** — affects CAD clearance |
 | setuptools | Needs explicit `packages = ["barnaby"]`. Or skip packaging: `pip install -r requirements.txt` and `python -m barnaby` |
@@ -320,6 +338,12 @@ identity, ESP32, CAD.
 | A quiet-room level reading proves nothing | Ambient noise reads ~-45 dBFS on *every* device, working or not, and Whisper hallucinates fluent sentences into near-silence ("I love you", "We'll be right back"). Both were mistaken for hardware faults this session. Play a known tone and capture it, or speak known words |
 | Reading the service log | `journalctl --user-unit barnaby -f`. **Not** `--user -u barnaby`, which looks in the user's own journal, finds nothing, and prints "No journal files were found" as if the service had never run. The unit's stdout goes to the *system* journal; `admin` reads it via the `adm` group |
 | The journal is volatile | `/var/log/journal` does not exist, so `Storage=auto` keeps everything in `/run` and a reboot loses it. `sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal` fixes it, and needs a password |
+| **The array has TWO playback gain stages, in series** | `amixer -c 0 sget PCM` shows only the first. The second is `numid=6` (`PCM Playback Volume`, index=1) and is invisible to the simple mixer — it shipped at 40/60 (-20 dB) and silently ate 20 dB. Use `amixer -c 0 cget numid=5` and `numid=6` to see both. Tuned 2026-08-26 to **stage 0 = 60 (0 dB), stage 1 = 54 (-6 dB)** by ear on speech |
+| ALSA levels do not survive a reboot | Handled in config: `audio.playback_volume` is applied to every playback stage at startup, so a fresh Pi or one that lost its mixer state comes up right. Nothing needs storing by hand — set the level in `config.yaml`, not with `amixer`, or the next restart overwrites it |
+| **Hiss on TTS but not on test tones** | Aliasing in the resampler, not the hardware. `TTS.synth` downsampled Kokoro's 24 kHz to the array's 16 kHz with a bare `np.interp` and no low-pass, so everything above 8 kHz folded back into the audible band. Speech has sibilance at 8-12 kHz and hisses; a 440 Hz sine has nothing up there and sounds clean, so the tone test exonerates the wrong component. Measured: a 10 kHz tone came out at 5998 Hz at full strength. Fixed 2026-08-26 with `scipy.signal.resample_poly` (and a filtered NumPy fallback) — the alias dropped 51 dB |
+| **Buzz on speech but not on tones** | Not the driver's frequency range — constant-amplitude tones 500 Hz to 7 kHz were all clean — and not digital clipping (clips peak at 0.45, zero samples at full scale). It is the amp/driver distorting on *transients*: speech has a ~22 dB crest factor, so peaks hit hard while the average stays quiet. A tone at constant amplitude never reproduces it, which is why a tone sweep exonerates the wrong thing |
+| Volume alone cannot make this speaker clean *and* audible | Clean at -9 dB and inaudible across the kitchen; audible 9 dB higher and buzzing. The fix is compression, not a bigger number: `audio.playback_compression` pulls peaks down and lifts the clip, buying ~8 dB of loudness at the same peak level. Tuned to threshold 0.12 / ratio 4 by ear — ratio 6 and 8 were louder and sounded worse. With it on, stage 1 at 75 is still the ceiling |
+| Tuning volume by test tone overshoots | A full-scale sine is far harsher than speech and reads as painfully loud at levels where speech is fine. Tune with `--say`, not `speaker-test`, and change one thing per test |
 | Deploying to the Pi | `./deploy.sh` — rsyncs and restarts the service. It is a **user** unit, so `systemctl --user`, never sudo (`admin` needs a password for sudo, which is why it is not a system unit). `journalctl --user-unit barnaby -f` for the log |
 | `HA_TOKEN` | Put it in `~/barnaby/barnaby.env`, read by the unit's `EnvironmentFile`. A shell `export` does not survive a reboot, and unset silently disables tier 0 rather than erroring |
 | **Serve models by rapid-mlx alias, never by HuggingFace path** | The alias is what triggers `model_auto_config` — TurboQuant KV compression and, critically, the **prefix cache**. Served by raw path, the prefix cache logged 351 lookups and **0 hits**, so every turn reprocessed the whole prompt and tool schema. By alias: tool-turn TTFT 468 → 179 ms, plain chat 133 → 77 ms. `rapid-mlx models` lists them |

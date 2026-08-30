@@ -104,20 +104,50 @@ opens a conversation and a follow-up needs no second wake word (confirmed
 2026-08-22, including a pronoun resolved against history). Two things to watch
 now that it is in daily use:
 
-- **`follow_up_ms` is 10 s and the TV has not been tried against it.** Inside
-  the window there is no wake word, only VAD, which cannot tell a person from
-  a television. Cut it if turns start appearing that nobody began.
+- **`follow_up_ms` needs a brake. This has now happened for real** (2026-08-30):
+  a conference call in the kitchen drove ~25 back-to-back turns over four
+  minutes, each one transcribed and sent to the LLM, because inside the window
+  there is no wake word and VAD cannot tell a person from a meeting. Cutting
+  the 10 s window helps but does not fix it — the loop is self-sustaining while
+  anyone keeps talking.
+
+  Wanted: a bound on *consecutive* wake-word-free turns, so a session ends
+  after N of them however lively the room is. Worth pairing with a check that
+  the speech is addressed to Barnaby at all; an empty transcript already ends
+  the session, and a room full of speech is the case that slips through.
+
+  Note this also writes the room's conversation to `~/.cache/barnaby/turns.jsonl`,
+  which stores `text` and `reply` per turn. Worth deciding whether that file
+  should keep transcripts at all, or only timings.
 - **The wait before the window opens is the answer length**, since it opens
   only once playback drains. A 10 s answer means 10 s before a follow-up is
   possible. `max_tokens` is 400 by choice; that is the cost.
+
+**Working, and wanting real-world time rather than more code.** Both landed
+2026-08-30 and both are provisional in the same way: verified once, on purpose,
+in a quiet kitchen.
+
+- **Barge-in's false-positive rate is unmeasured.** It fires correctly when you
+  talk over him, and the array's AEC measured clean (0 of 31 frames read as
+  speech while he talks at full volume, 21 of 31 the moment a person does). But
+  a day of cooking noise, an extractor and a television is a different test.
+  The failure announces itself — he cuts off mid-sentence and the log says
+  `barge-in` on a turn nobody started. Raise `barge_in_ms` before disabling it.
+- **Compression is on and not yet trusted.** `audio.playback_compression` buys
+  ~8 dB of loudness at the same peak level, which is what makes him audible
+  across the kitchen without the amp buzzing on speech transients. Nick's read
+  after the first sitting: hard to tell how much it is doing. Judge it over
+  days, and if it needs a proper comparison, the honest test is same-peak —
+  compressed and raw normalised to the same level, so it is dynamics being
+  judged rather than volume. Set `playback_compression: null` to disable.
 
 **Not blocking anything, so unnumbered — acoustic characterisation.** The array
 is confirmed working end to end (2026-08-22), including with music playing, and
 nothing about it currently needs tuning. What was never measured, worth doing
 only when something misbehaves or before trusting the wake word in anger:
 usable range and off-axis angle; behaviour with the extractor running; and
-capture gain, which sits at max (0 dB) and is fine as shipped. Barge-in cannot
-be tested at all until playback moves to the array.
+capture gain, which sits at max (0 dB) and is fine as shipped. (Playback moved
+to the array on 2026-08-26, so barge-in is no longer blocked — see above.)
 
 Related, and done 2026-08-22: **per-turn metrics now persist** to
 `~/.cache/barnaby/turns.jsonl`, one JSON object per turn, with

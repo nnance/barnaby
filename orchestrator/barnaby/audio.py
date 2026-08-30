@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
+import re
+import subprocess
 from typing import Iterator
 
 import numpy as np
@@ -130,12 +132,162 @@ class Microphone:
             self._stream.close()
 
 
+def compress(audio: "np.ndarray", threshold: float = 0.12,
+             ratio: float = 4.0, peak: float = 0.85,
+             rate: int = 16_000) -> "np.ndarray":
+    """Even out speech dynamics so it is audible across a room.
+
+    Speech from Kokoro arrives with a ~22 dB crest factor — brief peaks far
+    above its average. That is the whole problem with a small speaker: the
+    amplifier distorts on the peaks while the *average* stays too quiet to hear
+    from the far side of a kitchen, so the volume control alone can deliver
+    clean or audible, never both. Measured here: clean at -9 dB and inaudible
+    across the room, buzzing on transients 9 dB higher.
+
+    Pulling the peaks down and lifting the whole clip raises loudness without
+    raising peak level. Same reason broadcast audio is compressed.
+
+    The envelope is smoothed over ~5 ms before it drives the gain. Per-sample
+    gain would follow the waveform itself and buzz — which is the artefact this
+    exists to remove, so getting that wrong is worse than not compressing.
+
+    Defaults are tuned by ear on this hardware (2026-08-26): +8 dB average with
+    no audible pumping. Harder settings were tried and rejected — ratio 6 and 8
+    were louder still and sounded worse.
+    """
+    if audio.size == 0:
+        return audio
+    env = np.abs(audio)
+    win = max(1, int(0.005 * rate))            # ~5 ms
+    env = np.convolve(env, np.ones(win) / win, mode="same")
+    gain = np.ones_like(env)
+    over = env > threshold
+    # Guard the divide: `over` already excludes zeros, but a denormal envelope
+    # would still produce an enormous gain and a very loud surprise.
+    gain[over] = (threshold + (env[over] - threshold) / ratio) / np.maximum(
+        env[over], 1e-9)
+    out = audio * gain
+    top = float(np.abs(out).max())
+    if top > 0:
+        out = out * (peak / top)
+    return out.astype("float32")
+
+
+def _alsa_card(device: str | int | None) -> int | None:
+    """ALSA card number for a sounddevice device name, or None.
+
+    `output_device` is a *name* ("reSpeaker"), deliberately: card numbers move
+    when hardware is added — plugging in the HDMI panel added vc4hdmi0/1 and
+    pushed the array from card 3 to card 0. But `amixer` addresses cards by
+    number, so the name has to be resolved at run time rather than written
+    down anywhere.
+
+    /proc/asound/cards holds both the short id and the full description, so a
+    substring match against the whole line finds "reSpeaker" whether the user
+    wrote the id or part of the product name.
+    """
+    if device is None:
+        return None
+    if isinstance(device, int):
+        return None            # a sounddevice index is not an ALSA card index
+    try:
+        text = open("/proc/asound/cards").read()
+    except OSError:
+        return None
+    want = device.lower()
+    card: int | None = None
+    for line in text.splitlines():
+        m = re.match(r"\s*(\d+)\s+\[", line)
+        if m:
+            card = int(m.group(1))
+        if card is not None and want in line.lower():
+            return card
+    return None
+
+
+def set_playback_volume(device: str | int | None,
+                        percent: int | list[int]) -> None:
+    """Set the playback gain stages on `device`.
+
+    `percent` is either one number for every stage, or a list applied stage by
+    stage in numid order. The list form exists because the two stages do not
+    want the same value: tuned by ear, this array sounds right at stage 0 = 100
+    and stage 1 = 90, and collapsing that to a single number changes the level.
+    A list shorter than the stage count leaves the remaining stages alone.
+
+    Why this exists at all: ALSA mixer levels live in kernel state on the Pi,
+    not in the repo. They are the one piece of tuning that `deploy.sh` could
+    not carry, they do not survive a power cut, and a fresh Pi comes up at
+    whatever the hardware defaults to. Setting them from config on every start
+    makes the level version-controlled and self-healing.
+
+    THE XVF3800 HAS TWO PLAYBACK GAIN STAGES IN SERIES, and `amixer sget PCM`
+    shows only the first. The second is `numid=6` ("PCM Playback Volume",
+    index=1); it ships at 40/60 (-20 dB) and silently eats 20 dB, which is
+    exactly as confusing to debug as it sounds. So this walks *every* numid
+    whose name is a playback volume rather than touching one by name.
+
+    Best-effort throughout: a missing amixer, an unreadable card, or a control
+    that rejects the value must never stop Barnaby from starting. Quiet audio
+    is a bad evening; no audio at all is a broken robot.
+    """
+    card = _alsa_card(device)
+    if card is None:
+        log.debug("no ALSA card for device %r — leaving volume alone", device)
+        return
+    try:
+        listing = subprocess.run(
+            ["amixer", "-c", str(card), "controls"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("could not list mixer controls on card %d: %s", card, e)
+        return
+
+    numids = [
+        m.group(1)
+        for line in listing.splitlines()
+        if "playback volume" in line.lower()
+        if (m := re.search(r"numid=(\d+)", line))
+    ]
+    if not numids:
+        log.debug("card %d exposes no playback volume control", card)
+        return
+
+    wanted = [percent] * len(numids) if isinstance(percent, int) else percent
+    applied = []
+    for numid, pct in zip(numids, wanted):
+        try:
+            subprocess.run(
+                ["amixer", "-c", str(card), "cset", f"numid={numid}", f"{pct}%"],
+                capture_output=True, text=True, timeout=5, check=True,
+            )
+            applied.append(pct)
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("could not set numid=%s on card %d: %s", numid, card, e)
+    if len(wanted) < len(numids):
+        # Worth saying out loud: a short list means a stage keeps whatever it
+        # had, which is exactly the invisible-attenuation trap this function
+        # exists to prevent.
+        log.warning("card %d has %d playback stage(s) but only %d configured — "
+                    "the rest keep their current level",
+                    card, len(numids), len(wanted))
+    if applied:
+        log.info("playback volume %s on card %d",
+                 ", ".join(f"{p}%" for p in applied), card)
+
+
 class Speaker:
     """Sequential playback queue with interruption, for barge-in."""
 
-    def __init__(self, device: str | int | None, rate: int = 24_000):
+    def __init__(self, device: str | int | None, rate: int = 24_000,
+                 compression: dict | None = None):
         self.device = device
         self.rate = rate
+        # None disables it entirely. Applied in push(), so every clip gets it —
+        # the acknowledgement bubbles included, which otherwise sit at a very
+        # different loudness from the speech around them.
+        self.compression = compression
         self.queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
         self._playing = asyncio.Event()
@@ -204,6 +356,8 @@ class Speaker:
             self._idle.set()
 
     def push(self, clip: np.ndarray) -> None:
+        if self.compression:
+            clip = compress(clip, rate=self.rate, **self.compression)
         self._outstanding += 1
         self._idle.clear()
         self.queue.put_nowait(clip)

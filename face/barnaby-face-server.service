@@ -1,0 +1,27 @@
+[Unit]
+# Serves the built face bundle over HTTP on 127.0.0.1:8080.
+#
+# Why a server at all, rather than pointing the browser at a file:// URL:
+# a file:// page gets an opaque origin, and the WebSocket to the orchestrator
+# is then a cross-origin request from a null origin. It works today and is one
+# browser update from not working. HTTP from loopback costs nothing and keeps
+# the origin ordinary.
+#
+# python3 -m http.server rather than nginx or lighttpd: the payload is three
+# static files totalling 16 kB, served to exactly one client on loopback. A
+# real web server is a package, a config file and a second thing to keep
+# running for no gain here.
+Description=Barnaby face static server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/face
+# --bind 127.0.0.1 deliberately: nothing off the Pi should reach this. The
+# face is served to the kiosk browser on the same machine and nobody else.
+ExecStart=/usr/bin/python3 -m http.server 8080 --bind 127.0.0.1 --directory %h/face
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

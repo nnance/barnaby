@@ -8,5 +8,5 @@ export default defineConfig({
     // One file each. Fewer requests for a browser starting on an appliance.
     rollupOptions: { output: { inlineDynamicImports: true } },
   },
-  server: { port: 5273 },
+  server: { port: 5273, allowedHosts: ['localhost', '127.0.0.1', 'nicks-mac-mini.local'] },
 });

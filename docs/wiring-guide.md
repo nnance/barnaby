@@ -79,6 +79,12 @@ MCU host.
 
 ## Interim — Waveshare USB card for output
 
+> **Historical as of 2026-08-26.** The speaker now hangs off the array, the
+> Waveshare card is unplugged, and barge-in is on. Kept because it documents
+> the arrangement latency was first measured under, and because it is the
+> fallback if the array's playback ever misbehaves. Skip to *Switching back*
+> for the current settings.
+
 Two USB devices, no wiring, works today. Both are USB Audio Class, so nothing
 to install.
 
@@ -104,14 +110,24 @@ Everything else is identical, so latency measured this way is real.
 
 ### Switching back once the pigtail arrives
 
+**Done 2026-08-26.** These are the settings now in `config.yaml`:
+
 ```yaml
-  output_device: <ReSpeaker index>   # same device as input
+  output_device: "reSpeaker"   # matched by NAME — same device as input
   barge_in_enabled: true
-  playback_rate: 16000               # XVF3800 caps at 16 kHz
+  playback_rate: 16000         # the ONLY rate the XVF3800 accepts
 ```
 
 All three change together. Miss `playback_rate` and everything plays at the
 wrong pitch and speed, which is a confusing thing to debug.
+
+`playback_rate` is not a preference here. `/proc/asound/card0/stream0` lists
+the playback endpoint as `Rates: 16000` — one rate, no alternatives. Kokoro
+renders at 24 kHz and the TTS client resamples down to whatever this says.
+
+Match by **name**, not index. Plugging in the HDMI panel added `vc4hdmi0` and
+`vc4hdmi1`, which renumbered the cards — the array moved from card 3 to card 0.
+Name matching is why that broke nothing.
 
 ---
 

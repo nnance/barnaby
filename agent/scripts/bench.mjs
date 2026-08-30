@@ -10,7 +10,7 @@
  */
 
 const URL_ = process.argv[2] ?? "http://127.0.0.1:8100/v1/chat/completions";
-const MODEL = process.argv[3] ?? "qwen3.8-27b-4bit";
+const MODEL = process.argv[3] ?? "qwen3.6-35b-8bit";
 
 // Kept in step with SYSTEM in orchestrator/barnaby/pipeline.py — a different
 // prompt gives different answer lengths and makes the numbers incomparable.

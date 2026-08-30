@@ -73,6 +73,10 @@ class Pipeline:
         self.ha = ha
         self.history: list[dict] = []
         self._idle_frames = 0
+        # Set by _answer when the user talked over him. The turn loop reads it
+        # to start listening immediately rather than waiting out the follow-up
+        # window — someone who interrupts is mid-sentence, not waiting.
+        self.interrupted = False
         self._open_frames = 0        # open-mic trigger, used when wake is None
         self._last_turn: float | None = None   # perf_counter of the last turn
 
@@ -84,16 +88,16 @@ class Pipeline:
             frame = await self.mic.queue.get()
 
             if self.speaker.is_playing:
-                # Barge-in only works when playback goes through the array, so
-                # its echo canceller has a reference to subtract. On a separate
-                # output device he will hear himself and cut himself off.
-                if not self.cfg.audio.barge_in_enabled:
-                    continue
-                if self.barge.feed(frame):
-                    log.info("barge-in")
-                    self.speaker.interrupt()
-                    self.barge.reset()
-                    await self._turn(preroll=self.mic.preroll())
+                # Barge-in is NOT handled here. It used to be, and it could
+                # never work: while Barnaby speaks, control is inside `_answer`
+                # awaiting the LLM and TTS, so this loop does not run until he
+                # has already finished. `_watch_for_barge_in` runs concurrently
+                # with playback instead, which is the only place that can see
+                # the microphone at the time it matters.
+                #
+                # Audio arriving here during playback is therefore leftovers —
+                # the acknowledgement bubbles, or the tail of a clip after an
+                # interrupt. Drop it.
                 continue
 
             if self._triggered(frame):
@@ -241,11 +245,23 @@ class Pipeline:
                 return
 
             await self.face.set_mood("curious")   # thinking
+            self.interrupted = False
             tier0 = await self._try_tier0(text, turn)
             if not tier0:
                 await self._answer(text, turn)
             turn.report(self.cfg.targets)
             self._last_turn = time.perf_counter()
+
+            if self.interrupted:
+                # Straight back to recording, no follow-up window. Someone who
+                # talks over him is already mid-sentence, and _watch_for_barge_in
+                # only fires after barge_in_ms of speech — so the first words
+                # are in the mic's ring buffer, not in the queue. The preroll is
+                # what makes them part of the turn instead of lost.
+                await self.face.set_mood("listening")
+                preroll = self.mic.preroll()
+                woken = False
+                continue
 
             if tier0 and not self.cfg.behaviour.follow_up_after_tier0:
                 await self.face.set_mood("neutral")
@@ -307,12 +323,84 @@ class Pipeline:
 
         pending: list[asyncio.Task[np.ndarray]] = []
         reply: list[str] = []
+        ack: asyncio.Task | None = None
+
+        def stop_ack() -> None:
+            """Real audio is about to play, so stop filling the wait.
+
+            The trigger is a clip reaching the speaker, not a token arriving —
+            see `first_token` for why the difference matters.
+            """
+            nonlocal ack
+            if ack is not None:
+                ack.cancel()
+                ack = None
+        # `_drain` calls this the instant the first clip is pushed, which is
+        # the earliest moment the wait is genuinely over.
+        self._stop_ack = stop_ack
+
+        def first_token() -> None:
+            # NOT a cancel point, deliberately.
+            #
+            # It was, and it was wrong: on a tool turn the model narrates in
+            # round one ("let me check the forecast"), and the agent HOLDS that
+            # text and usually drops it — so those tokens are never spoken. The
+            # ack was dying at ~570 ms on words the user would never hear,
+            # leaving the rest of the wait silent. Measured: first_token 569 ms,
+            # tool_started 952 ms, actual audio 3771 ms.
+            #
+            # A token is not a sound. The only honest signal that the wait is
+            # over is audio reaching the speaker, which is `_drain`.
+            turn.mark("first_token")
+
+        def on_tool(phase: str, tools: list[str]) -> None:
+            """The agent says a tool is running.
+
+            This no longer starts the acknowledgement — that is armed before
+            the request now, because the wait a user feels starts when they
+            stop talking, not when a tool happens to be chosen. What this is
+            still for is the metrics: `tool_started` and `tool_done` are what
+            let `--latency` say whether a slow turn was the model deciding,
+            the tool running, or round two prefilling.
+            """
+            if phase == "started":
+                turn.mark("tool_started")
+                log.info("tool running: %s", ", ".join(tools) or "unnamed")
+            elif phase == "finished":
+                turn.mark("tool_done")
+
         turn.mark("llm_sent")
+
+        # Armed BEFORE the request goes out, and cancelled when real audio
+        # first reaches the speaker (in `_drain`).
+        #
+        # It used to be armed by the tool event, which meant it could only ever
+        # explain a tool gap — and a plain turn that stalled said nothing at
+        # all. But the wait a user feels has nothing to do with whether a tool
+        # was involved: it starts the moment they stop talking. So the meaning
+        # changed from "a tool is running" to "I heard you, I am working".
+        #
+        # The cost is that this now runs on EVERY turn, so the threshold is
+        # doing all the work of keeping him quiet — see `_tool_ack`.
+        if self.cfg.behaviour.tool_ack != "none":
+            ack = asyncio.create_task(self._tool_ack(turn))
+
+        # Watch the microphone *while* he speaks. Started here rather than in
+        # run(), which cannot see the mic until this coroutine returns.
+        barge: asyncio.Task[bool] | None = None
+        if self.cfg.audio.barge_in_enabled:
+            barge = asyncio.create_task(self._watch_for_barge_in())
 
         try:
             async for sentence, is_first in self.llm.stream_sentences(
-                    messages, on_first_token=lambda: turn.mark("first_token")):
+                    messages, on_first_token=first_token,
+                    on_tool=on_tool):
                 if is_first:
+                    # NOT a cancel point either: a sentence has been segmented
+                    # but not yet synthesised, and TTS can take seconds. This
+                    # turn measured first_sentence -> speaking at 2542 ms, all
+                    # of which the user would have spent in silence. `_drain`
+                    # cancels, when there is audio.
                     turn.mark("first_sentence")
                 reply.append(sentence)
                 pending.append(asyncio.create_task(self.tts.synth(sentence)))
@@ -320,16 +408,102 @@ class Pipeline:
         except Exception:                          # noqa: BLE001
             log.exception("LLM failed")
             await self.face.set_fault("offline")
+        finally:
+            # A turn that died must not leave a tone playing into the next one,
+            # or into the follow-up window.
+            stop_ack()
+            self._stop_ack = None
 
         while pending:
+            if barge is not None and barge.done() and barge.result():
+                # Interrupted. Drop the clips still queued behind the one that
+                # was cut off — synthesising the rest of an answer nobody is
+                # listening to only delays the reply to what they just said.
+                for p in pending:
+                    p.cancel()
+                pending.clear()
+                break
             await self._drain(pending, turn, wait=True)
         self.speaker.end_utterance()
         turn.mark("tts_done")
+
+        # Wait for the audio, not for the queue. `tts_done` fires when the last
+        # clip is *pushed*, which on a short answer is ~17 ms after the first —
+        # while the speaker still has nine seconds to play. Cancelling the
+        # watcher here (as this did) killed it before there was anything left
+        # to interrupt, which is the second reason barge-in never fired.
+        interrupted = False
+        if barge is not None:
+            drained = asyncio.create_task(self.speaker.wait_until_idle())
+            done, _ = await asyncio.wait({barge, drained},
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if barge in done:
+                interrupted = barge.result()
+                drained.cancel()
+            else:
+                barge.cancel()
+            for t in (barge, drained):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+        else:
+            await self.speaker.wait_until_idle()
+        self.interrupted = interrupted
 
         turn.reply = " ".join(reply)
         if turn.reply:
             self.history += [{"role": "user", "content": text},
                              {"role": "assistant", "content": turn.reply}]
+
+    async def _watch_for_barge_in(self) -> bool:
+        """Listen for the user talking over Barnaby, while he is talking.
+
+        This has to be a concurrent task rather than a check in `run()`, which
+        is where it lived and why barge-in never fired: during a turn, control
+        is inside `_answer` awaiting the LLM and TTS, so `run()`'s loop is not
+        reading the microphone at all until he has finished speaking. The check
+        was real, the config was on, the AEC worked — and the code could only
+        ever run once the thing it was meant to interrupt was already over.
+
+        Measured on this hardware, the array's echo canceller is doing the hard
+        part: 0 of 31 frames read as speech while Barnaby talks at full volume
+        (mic peak 0.005), and 21 of 31 the moment a person speaks over him.
+
+        Returns True if it interrupted, so the caller can abandon the rest of
+        the answer rather than resuming a reply nobody is listening to.
+        """
+        self.barge.reset()
+        self.mic.flush()          # discard what queued up before he started
+        started = False
+        try:
+            while True:
+                frame = await self.mic.queue.get()
+                if self.speaker.is_playing:
+                    # First audio of the turn. Anything queued before this is
+                    # the room while he was still thinking, not an interruption.
+                    if not started:
+                        started = True
+                        self.barge.reset()
+                        self.mic.flush()
+                        continue
+                elif started:
+                    return False      # he finished on his own
+                else:
+                    # He has not started speaking yet. This is the gap between
+                    # the LLM request and the first TTS clip — seconds, on a
+                    # tool turn — and exiting here is what made barge-in look
+                    # broken: the task was created before the first push, saw
+                    # is_playing False on its very first frame, and returned
+                    # before there was anything to interrupt.
+                    continue
+                if self.barge.feed(frame):
+                    log.info("barge-in")
+                    self.speaker.interrupt()
+                    self.barge.reset()
+                    return True
+        except asyncio.CancelledError:
+            raise
 
     async def _drain(self, pending: list, turn: Turn, wait: bool = False) -> None:
         """Push finished clips to the speaker, in sentence order."""
@@ -339,16 +513,130 @@ class Pipeline:
             except Exception:                      # noqa: BLE001
                 log.exception("TTS failed — skipping a sentence")
                 continue
-            if not self.speaker.is_playing:
+            # Real audio exists now, so stop filling the wait. This is the
+            # cancel point rather than the first token because a token is not
+            # a sound: on a tool turn round one's narration is held by the
+            # agent and usually dropped, so cancelling there killed the tone
+            # seconds before anything was actually audible.
+            stop = getattr(self, "_stop_ack", None)
+            if stop is not None:
+                stop()
+            # "First real audio of this turn?" — asked of the turn, not of the
+            # speaker. `is_playing` used to mean "an earlier sentence of this
+            # same answer is still going", which was the same question back
+            # when nothing else could have played first. The acknowledgement
+            # broke that: it pushes bubbles *before* sentence one, so
+            # `is_playing` is already true when the real speech arrives, and
+            # the guard silently swallowed both the mark and the mood for the
+            # whole turn. Symptom was a face stuck on `curious` through the
+            # entire answer, and every acknowledged turn logging "no audio
+            # produced" while audio played perfectly well.
+            if "speaking" not in turn.marks:
                 turn.mark("speaking")
                 await self.face.set_mood("happy")
             self.speaker.push(clip)
+
+    async def _tool_ack(self, turn: Turn) -> None:
+        """Acknowledge, once, that a turn is taking a moment.
+
+        Armed before the request and cancelled by real audio reaching the
+        speaker, so `tool_ack_after_ms` is the only thing keeping him quiet on
+        a fast turn — see `_answer`.
+
+        It plays ONCE. A tone that filled the entire wait was built and lived
+        with, and it was too much: reassuring for a second, wearing by the
+        fifth. One gesture with shape does the same job, provided the gesture
+        actually has shape — a bare chirp is too terse to say that anything is
+        still in progress, which is what `bubbles` is for.
+
+        Deliberately not spoken by default. Bubbles are instant and need no
+        network; TTS costs a round trip inside the gap it is covering and then
+        has to finish playing before the answer can start, which is how an
+        acknowledgement turns into a delay. Same reasoning as tier 0's chirp.
+        """
+        behaviour = self.cfg.behaviour
+        try:
+            await asyncio.sleep(behaviour.tool_ack_after_ms / 1000)
+
+            if behaviour.tool_ack == "speak":
+                clip = await self.tts.synth(behaviour.tool_ack_text)
+            elif behaviour.tool_ack == "chirp":
+                clip = chirp(self.speaker.rate)
+            else:
+                clip = bubbles(self.speaker.rate)
+
+            # The answer may have arrived while TTS was running, or while we
+            # slept. Losing that race is the failure this timer exists to
+            # avoid, so check at the last moment before making a sound.
+            if self.speaker.is_playing:
+                return
+            turn.mark("tool_ack")
+            log.info("acknowledged a slow turn (%s)", behaviour.tool_ack)
+            self.speaker.push(clip)
+            self.speaker.end_utterance()
+        except asyncio.CancelledError:
+            raise
+        except Exception:                          # noqa: BLE001
+            # Never let an acknowledgement break the turn it was decorating.
+            log.exception("tool acknowledgement failed")
 
     async def _speak_one(self, text: str, turn: Turn) -> None:
         clip = await self.tts.synth(text)
         turn.mark("speaking")
         self.speaker.push(clip)
         self.speaker.end_utterance()
+
+
+# The acknowledgement: four quick bubbles, rising. (start seconds, base Hz).
+#
+# It plays ONCE per turn, not continuously — a tone filling the whole wait was
+# tried and was too much to live with. This has to do the same job in half a
+# second: confirm he heard you AND that he is still working.
+#
+# RISING is deliberate. A falling contour reads as "done", which is precisely
+# the wrong message when the answer has not arrived yet. Four of them rather
+# than two because two reads as a chirp, and a chirp is too terse to say
+# anything is ongoing.
+_BUBBLES = (
+    (0.02, 200.0), (0.16, 235.0), (0.30, 275.0), (0.44, 320.0),
+)
+# How long one bubble lasts, and how far its pitch rises over that time. The
+# rise is what makes it a bubble rather than a beep: 2.6 means it ends at 3.6x
+# its starting pitch, which is the "bloop" of something surfacing.
+_BUBBLE_WIDTH_S = 0.16
+_BUBBLE_SWEEP = 2.6
+
+
+def bubbles(rate: int, level: float = 0.09) -> np.ndarray:
+    """The acknowledgement: four rising bubbles, ~0.6 s. Played once.
+
+    Says two things a plain chirp could not: that he heard you, and that he is
+    still working. The rising contour carries the second half — see `_BUBBLES`.
+
+    Quiet on purpose (peak 0.09 against the chirp's 0.22). It confirms rather
+    than announces, and it plays while the user is waiting, not to summon them.
+
+    What this replaced: a tone that played CONTINUOUSLY for the whole wait,
+    which was reassuring in principle and wearing in practice. One gesture with
+    shape beats an unbroken sound — but a bare chirp is too terse to say
+    anything is ongoing, which is why this is four bubbles and not one blip.
+    """
+    span = max(start + _BUBBLE_WIDTH_S for start, _ in _BUBBLES)
+    n = int(rate * span)
+    t = np.arange(n, dtype=np.float32) / rate
+    out = np.zeros(n, dtype=np.float32)
+    for start, f0 in _BUBBLES:
+        mask = (t >= start) & (t < start + _BUBBLE_WIDTH_S)
+        if not mask.any():
+            continue
+        local = t[mask] - start
+        # Pitch rises across each bubble: the "bloop".
+        freq = f0 * (1 + _BUBBLE_SWEEP * local / _BUBBLE_WIDTH_S)
+        # sin^2 rather than sin^3: softer than a click, but articulated enough
+        # that the bubbles stay distinct instead of blurring into a hum.
+        env = np.sin(np.pi * local / _BUBBLE_WIDTH_S) ** 2
+        out[mask] += (env * np.sin(2 * np.pi * freq * local)).astype("float32")
+    return (level * out).astype("float32")
 
 
 def chirp(rate: int, ms: int = 180) -> np.ndarray:

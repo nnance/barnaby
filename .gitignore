@@ -5,3 +5,10 @@ dist/
 *.tsbuildinfo
 .vite/
 deps/
+
+# Personal context: names, home location. Never commit this.
+#
+# The real file lives here at the root so it survives a working-tree change,
+# and agent/CONTEXT.md is a symlink to it. Both are ignored: agent/.gitignore
+# covers the symlink, this covers the file it points at.
+CONTEXT.md

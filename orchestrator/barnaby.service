@@ -26,6 +26,14 @@ Documentation=https://github.com/nicknance/barnaby
 # so a start before DNS works fails on the first turn rather than at startup.
 After=network-online.target sound.target
 Wants=network-online.target
+# Do not fight a genuinely broken deploy. Five failures inside a minute means
+# the code is wrong, and a restart loop only buries the traceback in the log.
+#
+# These belong in [Unit], NOT [Service] — systemd ignores them under [Service]
+# with a single "Unknown key" line at load, so the limit reads as configured
+# and never actually applies.
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
@@ -44,10 +52,6 @@ Environment=PYTHONUNBUFFERED=1
 
 Restart=on-failure
 RestartSec=3
-# Do not fight a genuinely broken deploy. Five failures inside a minute means
-# the code is wrong, and a restart loop only buries the traceback in the log.
-StartLimitBurst=5
-StartLimitIntervalSec=60
 
 [Install]
 WantedBy=default.target

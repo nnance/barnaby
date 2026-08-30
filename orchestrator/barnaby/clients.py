@@ -127,10 +127,23 @@ class LLM:
     async def stream_sentences(
         self, messages: list[dict], first_flush_chars: int = 24,
         on_first_token: Callable[[], None] | None = None,
+        on_tool: Callable[[str, list[str]], None] | None = None,
     ) -> AsyncIterator[tuple[str, bool]]:
         """Yields (sentence, is_first). The first chunk is flushed at the
         earliest clause boundary past `first_flush_chars` so audio starts
-        sooner; later chunks wait for real sentence boundaries."""
+        sooner; later chunks wait for real sentence boundaries.
+
+        `on_tool(phase, tools)` fires on the agent's `barnaby.tool_call`
+        frames — "started" when the model commits to a tool, "finished" when
+        the results are in. It is a callback rather than a second kind of
+        yielded value so that callers who do not care need no change, the same
+        way `on_first_token` works.
+
+        A tool turn is otherwise silence: round one produces no speakable text,
+        so without this the caller cannot tell a thinking robot from a hung
+        one. What to DO about it is the caller's business — the agent sends the
+        fact and stays out of presentation.
+        """
         payload: dict = {
             "model": self.model, "messages": messages, "stream": True,
             "max_tokens": self.max_tokens, "temperature": self.temperature,
@@ -152,8 +165,26 @@ class LLM:
                     break
                 try:
                     import json
-                    delta = json.loads(blob)["choices"][0].get("delta", {})
-                except (KeyError, IndexError, ValueError):
+                    frame = json.loads(blob)
+                except ValueError:
+                    continue
+                # The agent's tool-intent event, not a chat chunk. It carries
+                # no `choices` at all, so it must be handled before anything
+                # reaches for one — and anything unrecognised is skipped rather
+                # than assumed to be speech.
+                if frame.get("object") == "barnaby.tool_call":
+                    if on_tool is not None:
+                        try:
+                            on_tool(frame.get("phase") or "",
+                                    frame.get("tools") or [])
+                        except Exception:            # noqa: BLE001
+                            # An acknowledgement is a nicety. It must never be
+                            # the reason an answer does not arrive.
+                            log.exception("tool-intent callback failed")
+                    continue
+                try:
+                    delta = frame["choices"][0].get("delta", {})
+                except (KeyError, IndexError, TypeError):
                     continue
                 piece = delta.get("content") or ""
                 if not piece:
@@ -216,14 +247,57 @@ class TTS:
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
         if sr != self.rate:
-            # Cheap linear resample; the TTS rate is fixed in practice.
-            n = int(len(audio) * self.rate / sr)
-            audio = np.interp(np.linspace(0, len(audio), n),
-                              np.arange(len(audio)), audio).astype("float32")
+            audio = _resample(audio, sr, self.rate)
         return audio
 
     async def aclose(self) -> None:
         await self._http.aclose()
+
+
+def _resample(audio: "np.ndarray", sr: int, target: int) -> "np.ndarray":
+    """Resample with an anti-aliasing filter.
+
+    This used to be a bare `np.interp`, with the note "the TTS rate is fixed in
+    practice" — true while playback went through the Waveshare card at Kokoro's
+    own 24 kHz, so nothing was ever resampled. Moving the speaker to the array
+    made the target 16 kHz and turned that comment false, and downsampling
+    without a low-pass aliases: everything above the new Nyquist folds back
+    into the audible band.
+
+    On speech that is *audible as hiss*, because sibilance lives at 8-12 kHz
+    and lands right in the fold. It is inaudible on a test tone, which has
+    nothing up there to fold — so tones sounded clean while TTS did not, and
+    the hardware looked innocent. Measured on this path: a 10 kHz tone in a
+    24 kHz source came out at 5998 Hz, full strength, instead of being filtered
+    to silence.
+
+    scipy's polyphase resampler is the right tool and is already installed. It
+    is deliberately not a hard requirement — the NumPy fallback filters first
+    and is correct, just slower, so a venv without scipy degrades in speed
+    rather than in sound.
+    """
+    if sr == target:
+        return audio
+    try:
+        from math import gcd
+        from scipy.signal import resample_poly       # type: ignore[import]
+        g = gcd(sr, target)
+        return resample_poly(audio, target // g, sr // g).astype("float32")
+    except ImportError:
+        pass
+
+    # Fallback: windowed-sinc low-pass, then linear interpolation. The filter
+    # is the part that matters; interpolating without it is the bug.
+    if target < sr:
+        cutoff = 0.45 * target / sr          # a little below Nyquist
+        taps = 101
+        n = np.arange(taps) - (taps - 1) / 2
+        h = 2 * cutoff * np.sinc(2 * cutoff * n) * np.hamming(taps)
+        h /= h.sum()
+        audio = np.convolve(audio, h, mode="same").astype("float32")
+    count = int(len(audio) * target / sr)
+    return np.interp(np.linspace(0, len(audio), count, endpoint=False),
+                     np.arange(len(audio)), audio).astype("float32")
 
 
 async def health(url: str, timeout: float = 2.0) -> bool:

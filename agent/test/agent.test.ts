@@ -266,10 +266,31 @@ describe("agent loop with a tool", () => {
 
 	it("emits no tool_calls frames to the Pi", async () => {
 		// The Pi has no idea what a tool call is; it would try to speak it.
+		//
+		// Matched on the delta key rather than the bare string "tool_calls":
+		// the gateway now emits its own `barnaby.tool_call` frames on purpose,
+		// and those are a distinct object the Pi skips rather than machinery it
+		// would speak. What must never leak is upstream's raw tool_calls delta.
 		const { raw } = await collect(
 			`http://127.0.0.1:${port}/v1/chat/completions`,
 		);
-		assert.doesNotMatch(raw, /tool_calls/, "tool machinery leaked to the Pi");
+		assert.doesNotMatch(
+			raw,
+			/"tool_calls":/,
+			"tool machinery leaked to the Pi",
+		);
+		// And nothing the gateway adds may ever land in a content delta, which
+		// is the only thing the Pi speaks.
+		for (const line of raw.split("\n")) {
+			if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+			const parsed = JSON.parse(line.slice(6)) as {
+				choices?: { delta?: { content?: string } }[];
+			};
+			const content = parsed.choices?.[0]?.delta?.content;
+			if (typeof content === "string") {
+				assert.doesNotMatch(content, /tool/i, "a tool name reached speech");
+			}
+		}
 	});
 });
 
@@ -559,6 +580,185 @@ describe("tools that were not offered", () => {
 		} finally {
 			await new Promise<void>((r) => gateway.close(() => r()));
 			await new Promise<void>((r) => rogue.close(() => r()));
+		}
+	});
+});
+
+describe("tool intent reaches the client as its own event", () => {
+	// Option B: the agent streams the FACT that a tool is running and the
+	// client decides what to do about it. The agent says nothing aloud —
+	// how to react is presentation, and this server does not know whether its
+	// caller has a speaker.
+
+	/** Every `barnaby.tool_call` frame in a raw stream, in order. */
+	function toolEvents(
+		raw: string,
+	): { object: string; phase: string; tools: string[] }[] {
+		const out: { object: string; phase: string; tools: string[] }[] = [];
+		for (const line of raw.split("\n")) {
+			if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+			try {
+				const parsed = JSON.parse(line.slice(6)) as {
+					object?: string;
+					phase?: string;
+					tools?: string[];
+				};
+				if (parsed.object === "barnaby.tool_call") {
+					out.push({
+						object: parsed.object,
+						phase: parsed.phase ?? "",
+						tools: parsed.tools ?? [],
+					});
+				}
+			} catch {
+				// not JSON — a keepalive comment. Ignored, as the Pi ignores it.
+			}
+		}
+		return out;
+	}
+
+	it("announces started then finished, once each, naming the tool", async () => {
+		const model = fakeModel({
+			toolName: "get_forecast",
+			args: '{"latitude":1,"longitude":2,"days":2}',
+		});
+		const mport = await listen(model.server);
+		const gw = createAgentServer({
+			...cfgFor(mport),
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
+		});
+		const p = await listen(gw);
+		try {
+			const { raw } = await collect(`http://127.0.0.1:${p}/v1/chat/completions`);
+			const events = toolEvents(raw);
+			assert.deepEqual(
+				events.map((e) => e.phase),
+				["started", "finished"],
+				"expected exactly one started and one finished, in that order",
+			);
+			assert.deepEqual(events[0]?.tools, ["get_forecast"]);
+			assert.deepEqual(events[1]?.tools, ["get_forecast"]);
+		} finally {
+			await new Promise<void>((r) => gw.close(() => r()));
+			await new Promise<void>((r) => model.server.close(() => r()));
+		}
+	});
+
+	it("announces before the answer, not after it", async () => {
+		// The whole point. An acknowledgement that arrives after the first
+		// content token is covering a silence that is already over.
+		const model = fakeModel({
+			toolName: "get_forecast",
+			args: '{"latitude":1,"longitude":2,"days":2}',
+		});
+		const mport = await listen(model.server);
+		const gw = createAgentServer({
+			...cfgFor(mport),
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
+		});
+		const p = await listen(gw);
+		try {
+			const { raw } = await collect(`http://127.0.0.1:${p}/v1/chat/completions`);
+			const startedAt = raw.indexOf('"phase":"started"');
+			const firstContent = raw.indexOf('"content":');
+			assert.ok(startedAt !== -1, "no started frame at all");
+			assert.ok(firstContent !== -1, "the turn never produced content");
+			assert.ok(
+				startedAt < firstContent,
+				"the acknowledgement landed after the answer had begun",
+			);
+		} finally {
+			await new Promise<void>((r) => gw.close(() => r()));
+			await new Promise<void>((r) => model.server.close(() => r()));
+		}
+	});
+
+	it("says nothing at all on a turn that uses no tool", async () => {
+		// THE LOAD-BEARING TEST. The common case must not pay for the rare one:
+		// a tool-less turn must be byte-identical to one from before any of
+		// this existed. A gateway that announced on every turn would pass every
+		// other test here and make ordinary turns worse.
+		const model = fakeModel({});
+		const mport = await listen(model.server);
+		const gw = createAgentServer({
+			...cfgFor(mport),
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
+		});
+		const p = await listen(gw);
+		try {
+			const { raw, text } = await collect(
+				`http://127.0.0.1:${p}/v1/chat/completions`,
+			);
+			assert.deepEqual(toolEvents(raw), [], "announced a tool that never ran");
+			assert.doesNotMatch(raw, /barnaby\.tool_call/);
+			assert.equal(text, "It is hot today.");
+		} finally {
+			await new Promise<void>((r) => gw.close(() => r()));
+			await new Promise<void>((r) => model.server.close(() => r()));
+		}
+	});
+
+	it("announces once per turn, not once per round", async () => {
+		// Two rounds of tool calls is still one pause the user is waiting out.
+		// A second "started" would have the client acknowledge twice mid-turn.
+		const model = fakeModel({
+			toolName: "get_forecast",
+			args: '{"latitude":1,"longitude":2,"days":2}',
+			rounds: 2,
+		});
+		const mport = await listen(model.server);
+		const gw = createAgentServer({
+			...cfgFor(mport),
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
+		});
+		const p = await listen(gw);
+		try {
+			const { raw } = await collect(`http://127.0.0.1:${p}/v1/chat/completions`);
+			const started = toolEvents(raw).filter((e) => e.phase === "started");
+			assert.equal(started.length, 1, "announced more than once in one turn");
+		} finally {
+			await new Promise<void>((r) => gw.close(() => r()));
+			await new Promise<void>((r) => model.server.close(() => r()));
+		}
+	});
+
+	it("is invisible to a client that does not know the event", async () => {
+		// A web chat, or curl, must see a well-formed stream ending in exactly
+		// one [DONE]. The frames are additive: an unknown `object` is skipped by
+		// the Pi's own content filter and by any OpenAI-compatible client.
+		const model = fakeModel({
+			toolName: "get_forecast",
+			args: '{"latitude":1,"longitude":2,"days":2}',
+		});
+		const mport = await listen(model.server);
+		const gw = createAgentServer({
+			...cfgFor(mport),
+			context: "You live in the house at latitude 1 and longitude 2.",
+			weather: { unit: "fahrenheit" },
+		});
+		const p = await listen(gw);
+		try {
+			const { raw, text, doneCount } = await collect(
+				`http://127.0.0.1:${p}/v1/chat/completions`,
+			);
+			assert.equal(doneCount, 1, "exactly one [DONE] terminates the stream");
+			// Reconstructing speech the way the Pi does yields the answer alone,
+			// with no trace of the acknowledgement in it.
+			assert.doesNotMatch(text, /tool/i);
+			assert.ok(text.length > 0, "the turn produced no speakable content");
+			// Every data frame is parseable JSON or [DONE]; nothing malformed.
+			for (const line of raw.split("\n")) {
+				if (!line.startsWith("data: ")) continue;
+				if (line.includes("[DONE]")) continue;
+				assert.doesNotThrow(() => JSON.parse(line.slice(6)));
+			}
+		} finally {
+			await new Promise<void>((r) => gw.close(() => r()));
+			await new Promise<void>((r) => model.server.close(() => r()));
 		}
 	});
 });

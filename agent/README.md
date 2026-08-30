@@ -123,6 +123,58 @@ between -90 and 90, because that is what a latitude is. Whether those
 coordinates are the *right* place is the model's problem: if it gets that
 wrong, the fix is a better model, not a tool that argues with it.
 
+## Tool intent, and why the agent does not say "let me check"
+
+A tool turn is two inference rounds. Round one produces no speakable text at
+all — it produces a `tool_calls` delta — so everything from there until round
+two starts speaking is silence. Measured on the alias: ~1000 ms, and it reads
+to a user as a hang.
+
+The agent streams the **fact** and lets the client decide what to do about it:
+
+```
+data: {"object":"barnaby.tool_call","phase":"started","tools":["get_forecast"]}
+data: {"object":"barnaby.tool_call","phase":"finished","tools":["get_forecast"]}
+```
+
+`started` goes out on the first `tool_calls` delta — measured over 12 live
+turns, a median of **546 ms** (250-971) into the turn, because the tool NAME
+arrives in that first delta and the arguments stream in afterwards. `finished`
+goes out once the tools have run, before round two's upstream call, so a client
+can stop an animation on an event rather than a guess and a stuck tool shows as
+a gap rather than as undifferentiated silence.
+
+**Why a distinct `object` and not a content delta.** A content delta is spoken
+by anything that receives it, with no way to opt out — a web chat would print
+"let me check" mid-answer. An unknown `object` is skipped by the Pi's own
+`choices[0].delta.content` filter and by any OpenAI-compatible client, so this
+is purely additive: a client that has never heard of it behaves exactly as
+before. `[DONE]` is unchanged, and a turn using no tool emits neither frame.
+
+**Why the agent does not just speak.** What is happening is a fact and belongs
+here; how to react is presentation, and this server cannot know whether its
+caller has a speaker, a screen, or neither — the same split that keeps
+spoken-answer guidance in the Pi's system message. The Pi has a chirp and a
+face that cost nothing. A spoken acknowledgement costs a Kokoro round trip
+(~290 ms) inside the very gap it is covering, and then has to finish playing
+before the answer can start, which is how an acknowledgement becomes a delay.
+
+Arguments are never sent: the client has no use for them and they carry the
+household's coordinates.
+
+The log gains `ack=` (turn start to the `started` frame — whether the
+acknowledgement lands inside the gap or after it) and `tool_bytes=`, counted
+apart from `bytes` so that stays a measure of answer content.
+
+```
+chat 200 msgs=2 stream=true total=2873ms bytes=2319 rounds=2 \
+     tools=get_forecast tool_gap=1011ms ack=958ms tool_bytes=163
+```
+
+**This does not improve TTFT and is not meant to.** The answer arrives when it
+arrives; what changes is that the wait is explicable. Actually shortening it
+means attacking round-two prefill, which is separate work.
+
 ## Routes
 
 | Route | Who calls it |
@@ -149,7 +201,7 @@ By hand, against the real thing:
 ```bash
 curl -sN http://localhost:8100/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"qwen3.8-27b-4bit","messages":[{"role":"user","content":"hello"}],"stream":true}'
+  -d '{"model":"qwen3.6-35b-8bit","messages":[{"role":"user","content":"hello"}],"stream":true}'
 ```
 
 Watch it, do not just capture it. Frames must appear one at a time. If the

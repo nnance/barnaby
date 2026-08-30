@@ -38,6 +38,21 @@ class AudioCfg:
     barge_in_ms: int = 200
     barge_in_enabled: bool = True   # needs playback routed through the array
     playback_rate: int = 24_000   # 16000 when playing through the XVF3800
+    # Applied to every playback gain stage at startup, as a percentage of the
+    # control's range. None leaves the hardware alone.
+    #
+    # This is here rather than in ALSA's own state because mixer levels are
+    # kernel state on one machine: not in git, not carried by deploy.sh, and
+    # reverted by a power cut. Setting it every start makes it
+    # version-controlled and self-healing.
+    playback_volume: int | list[int] | None = None
+    # Speech dynamics. None disables compression entirely.
+    #
+    # This is not a nicety: on a small speaker, raw TTS is either clean or
+    # audible across a room, not both, because speech peaks sit ~22 dB above
+    # its average and the amp distorts on them long before the average gets
+    # loud. Compression buys ~8 dB of usable loudness at the same peak level.
+    playback_compression: dict | None = None
 
 
 @dataclass
@@ -52,7 +67,7 @@ class MacCfg:
     asr_url: str = "http://mac.local:8000/v1"
     asr_model: str = "whisper-large-v3-turbo"
     llm_url: str = "http://mac.local:8001/v1"
-    llm_model: str = "qwen3.8-27b-4bit"
+    llm_model: str = "qwen3.6-35b-8bit"
     tts_url: str = "http://mac.local:8002/v1"
     tts_model: str = "kokoro"
     tts_voice: str = "af_heart"
@@ -98,6 +113,43 @@ class BehaviourCfg:
     # the window above: history outlives it, deliberately, so re-waking within
     # the session still resolves "what about tomorrow".
     session_idle_ms: int = 180_000   # ~3 min, matching sleep_after_frames
+
+    # "I heard you, and I am working on it" — played once, when a turn is slow.
+    #
+    # Armed when the request goes out and cancelled when real audio reaches the
+    # speaker, so it covers the whole wait rather than only a tool call. It was
+    # tool-only at first, which was wrong twice over: it could not explain a
+    # plain turn that stalled, and it fired part-way into a gap the user had
+    # already been waiting through. The wait a user feels starts when they stop
+    # talking.
+    #
+    # "bubbles" is four quick rising blips, ~0.6 s. The rising contour is the
+    # part that says "still working" — a falling one reads as "done", which is
+    # the wrong message while the answer is still coming.
+    #
+    # A continuous tone filling the whole wait was built and lived with, and it
+    # was too much: reassuring for a second, wearing by the fifth. The finding
+    # worth keeping is that one gesture with shape beats an unbroken sound; the
+    # implementation is in git if it is ever wanted back.
+    #
+    # "chirp" is the original two descending notes — terser, and it says he
+    # heard you without suggesting anything is ongoing. "speak" sends a line to
+    # TTS, which costs a Kokoro round trip (~290 ms) inside the gap it is
+    # covering and must finish playing before the answer starts. "none"
+    # disables the sound and leaves only the face.
+    tool_ack: str = "bubbles"        # bubbles | chirp | speak | none
+    # Spoken only when tool_ack is "speak".
+    tool_ack_text: str = "Let me check."
+    # Wait this long before acknowledging, and cancel if the answer arrives
+    # first. THIS THRESHOLD IS THE ONLY THING KEEPING HIM QUIET, since the
+    # timer runs on every turn rather than only on tool turns.
+    #
+    # Measured to first audio: a cached plain question can come back in under
+    # 700 ms and stay silent, while a tool turn takes ~3 s and always sounds.
+    # Lower toward 300 to acknowledge nearly every turn — worth considering,
+    # since "I heard you" is most useful when it is reliable. Raise toward 1500
+    # to sound only on the genuinely slow ones.
+    tool_ack_after_ms: int = 700
 
 
 @dataclass
