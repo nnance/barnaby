@@ -3,14 +3,19 @@
 audio:
   # `python -m barnaby --devices` to find these.
   # Input is the ReSpeaker XVF3800, which finally enumerated on 2026-08-22
-  # (2886:001a, ALSA card 3) after a Pi reboot plus an unplug/replug. If it
-  # ever vanishes from --devices again, do that before anything else.
-  # Output is still TEMPORARY — the Waveshare USB sound card, until the JST
-  # PH 2.0 pigtail arrives and the speaker can hang off the array itself.
-  # Because playback does not go through the array, its AEC has no reference
-  # signal, so barge_in_enabled stays false below.
+  # (2886:001a) after a Pi reboot plus an unplug/replug. If it ever vanishes
+  # from --devices again, do that before anything else.
+  #
+  # Output is now the array too (2026-08-26): the speaker hangs off the
+  # XVF3800 and the Waveshare USB card is gone. This is what makes barge-in
+  # possible — playback through the array gives its echo canceller the
+  # reference signal it needs to subtract Barnaby's own voice from the mic.
+  #
+  # Both are matched by NAME, not card number. The numbers moved when the HDMI
+  # panel was plugged in (it adds vc4hdmi0/1), and matching by name is why that
+  # did not break anything.
   input_device: "reSpeaker"
-  output_device: "USB PnP"
+  output_device: "reSpeaker"
   input_channels: null   # null = device native. This firmware reports 2.
   # This XVF3800 does NOT expose raw capsules. Its USB descriptor advertises a
   # single 2-channel, 16 kHz S16_LE capture interface (chmap FL,FR) — the XMOS
@@ -33,15 +38,62 @@ audio:
   # room noise is reading as speech and the hangover never elapses.
   vad_threshold: 0.5
   barge_in_ms: 200
-  # OFF while output goes through a separate device. The array's AEC has no
-  # reference for audio it didn't play, so Barnaby hears himself and cuts
-  # himself off mid-sentence. Turn back on when the speaker moves to the array.
-  barge_in_enabled: false
-  # Kokoro renders at 24 kHz and the TTS client resamples to whatever this is.
-  # Waveshare USB card: 24000 (no resample). If sounddevice rejects it, 48000.
-  # When the speaker moves to the array, drop this to 16000 — the XVF3800 caps
-  # there, and a mismatch plays everything at the wrong pitch and speed.
-  playback_rate: 24000
+  # ON as of 2026-08-26, now that playback goes through the array and its echo
+  # canceller has a reference to subtract. This is the whole reason the speaker
+  # moved off the Waveshare card.
+  #
+  # UNPROVEN IN A ROOM. The condition the AEC needs is met, but how well the
+  # XVF3800 actually cancels at conversational volume is not measured. The
+  # failure mode is unmistakable and self-announcing: Barnaby cuts himself off
+  # mid-sentence, and the log says `barge-in` on a turn where nobody spoke.
+  # If that happens, raise barge_in_ms before switching this back off — a
+  # longer confirmation window is the cheaper fix than losing the feature.
+  barge_in_enabled: true
+  # 16000, NOT 24000. The array's playback endpoint advertises exactly one
+  # rate — `Rates: 16000` in /proc/asound/card0/stream0 — so this is not a
+  # preference, it is the only thing it accepts. Kokoro returns 24 kHz and the
+  # TTS client resamples down to whatever this says. Get it wrong and you get
+  # the classic symptom: right words, wrong pitch and speed.
+  playback_rate: 16000
+  # Playback gain, per stage, as a percentage of each control's range.
+  #
+  # THE XVF3800 HAS TWO PLAYBACK GAIN STAGES IN SERIES and `amixer sget PCM`
+  # shows only the first. The second (`numid=6`) ships at 40/60 = -20 dB and
+  # silently eats 20 dB — audible as "he is too quiet" with no other symptom,
+  # and invisible to the obvious diagnostic. Set both explicitly.
+  #
+  # Applied at every startup, deliberately. ALSA mixer levels are kernel state
+  # on the Pi: not in git, not carried by deploy.sh, and reverted by a power
+  # cut unless someone ran `alsactl store`. Setting them from here makes the
+  # level version-controlled and self-healing.
+  #
+  # [100, 75] was tuned by ear on speech, 2026-08-26. Tune with `--say`, not
+  # `speaker-test`: a full-scale sine is far harsher than speech and reads as
+  # painfully loud at levels where speech is comfortable.
+  #
+  # Stage 1 sits 9 dB below where loudness alone would put it, deliberately.
+  # Speech here has a ~22 dB crest factor - peaks far above its average - and
+  # above this level those peaks buzz. Not digital clipping (clips measure
+  # peak 0.45, zero samples at full scale) and not the driver's frequency
+  # range (constant-amplitude tones from 500 Hz to 7 kHz are all clean); it is
+  # the amplifier or driver distorting on transients. So the ceiling is set by
+  # what stays clean on peaks, not by what sounds loud on average. More volume
+  # needs a speaker with more headroom, not a bigger number here.
+  playback_volume: [100, 75]
+  # Speech dynamics, applied to every clip before playback. null disables it.
+  #
+  # Why this exists: Kokoro's speech has a ~22 dB crest factor, so on this
+  # speaker the volume control alone gives you clean OR audible across a room,
+  # never both — clean at this level and inaudible at the far end of the
+  # kitchen, buzzing on transients 9 dB higher. Compression pulls the peaks
+  # down and lifts the whole clip: +8 dB of average loudness at the same peak.
+  #
+  # Tuned by ear 2026-08-26. Harder settings (ratio 6 and 8) were louder still
+  # and sounded worse, so this is not simply "as much as possible".
+  playback_compression:
+    threshold: 0.12
+    ratio: 4.0
+    peak: 0.85
 
 wake:
   model: hey_jarvis

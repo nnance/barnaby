@@ -16,7 +16,8 @@ import logging
 import math
 import sys
 
-from .audio import FRAME, SAMPLE_RATE, Microphone, Speaker
+from .audio import (FRAME, SAMPLE_RATE, Microphone, Speaker,
+                    set_playback_volume)
 from .clients import ASR, LLM, TTS, HomeAssistant, health
 from .config import Config
 from .face import FaceServer
@@ -287,7 +288,13 @@ async def main_async(args: argparse.Namespace) -> int:
         log.warning("HA enabled but no token — tier 0 disabled, everything "
                     "will hit the LLM and device commands will feel slow")
 
-    speaker = Speaker(cfg.audio.output_device, cfg.audio.playback_rate)
+    # Before the first clip, not after: the whole point is that a fresh Pi or
+    # one that lost its mixer state to a power cut comes up at the configured
+    # level rather than at whatever the hardware defaults to.
+    if cfg.audio.playback_volume is not None:
+        set_playback_volume(cfg.audio.output_device, cfg.audio.playback_volume)
+    speaker = Speaker(cfg.audio.output_device, cfg.audio.playback_rate,
+                      cfg.audio.playback_compression)
     await speaker.start()
 
     if args.say:

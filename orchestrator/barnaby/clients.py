@@ -247,14 +247,57 @@ class TTS:
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
         if sr != self.rate:
-            # Cheap linear resample; the TTS rate is fixed in practice.
-            n = int(len(audio) * self.rate / sr)
-            audio = np.interp(np.linspace(0, len(audio), n),
-                              np.arange(len(audio)), audio).astype("float32")
+            audio = _resample(audio, sr, self.rate)
         return audio
 
     async def aclose(self) -> None:
         await self._http.aclose()
+
+
+def _resample(audio: "np.ndarray", sr: int, target: int) -> "np.ndarray":
+    """Resample with an anti-aliasing filter.
+
+    This used to be a bare `np.interp`, with the note "the TTS rate is fixed in
+    practice" — true while playback went through the Waveshare card at Kokoro's
+    own 24 kHz, so nothing was ever resampled. Moving the speaker to the array
+    made the target 16 kHz and turned that comment false, and downsampling
+    without a low-pass aliases: everything above the new Nyquist folds back
+    into the audible band.
+
+    On speech that is *audible as hiss*, because sibilance lives at 8-12 kHz
+    and lands right in the fold. It is inaudible on a test tone, which has
+    nothing up there to fold — so tones sounded clean while TTS did not, and
+    the hardware looked innocent. Measured on this path: a 10 kHz tone in a
+    24 kHz source came out at 5998 Hz, full strength, instead of being filtered
+    to silence.
+
+    scipy's polyphase resampler is the right tool and is already installed. It
+    is deliberately not a hard requirement — the NumPy fallback filters first
+    and is correct, just slower, so a venv without scipy degrades in speed
+    rather than in sound.
+    """
+    if sr == target:
+        return audio
+    try:
+        from math import gcd
+        from scipy.signal import resample_poly       # type: ignore[import]
+        g = gcd(sr, target)
+        return resample_poly(audio, target // g, sr // g).astype("float32")
+    except ImportError:
+        pass
+
+    # Fallback: windowed-sinc low-pass, then linear interpolation. The filter
+    # is the part that matters; interpolating without it is the bug.
+    if target < sr:
+        cutoff = 0.45 * target / sr          # a little below Nyquist
+        taps = 101
+        n = np.arange(taps) - (taps - 1) / 2
+        h = 2 * cutoff * np.sinc(2 * cutoff * n) * np.hamming(taps)
+        h /= h.sum()
+        audio = np.convolve(audio, h, mode="same").astype("float32")
+    count = int(len(audio) * target / sr)
+    return np.interp(np.linspace(0, len(audio), count, endpoint=False),
+                     np.arange(len(audio)), audio).astype("float32")
 
 
 async def health(url: str, timeout: float = 2.0) -> bool:
