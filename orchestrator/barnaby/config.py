@@ -43,8 +43,8 @@ class AudioCfg:
     #
     # This is here rather than in ALSA's own state because mixer levels are
     # kernel state on one machine: not in git, not carried by deploy.sh, and
-    # gone after a power cut unless someone remembered `alsactl store`. Setting
-    # it every start makes it version-controlled and self-healing.
+    # reverted by a power cut. Setting it every start makes it
+    # version-controlled and self-healing.
     playback_volume: int | list[int] | None = None
     # Speech dynamics. None disables compression entirely.
     #

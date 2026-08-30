@@ -64,8 +64,9 @@ audio:
   #
   # Applied at every startup, deliberately. ALSA mixer levels are kernel state
   # on the Pi: not in git, not carried by deploy.sh, and reverted by a power
-  # cut unless someone ran `alsactl store`. Setting them from here makes the
-  # level version-controlled and self-healing.
+  # cut. Setting them from here makes the level version-controlled and
+  # self-healing — so change it here, not with `amixer`, which the next
+  # restart overwrites.
   #
   # [100, 75] was tuned by ear on speech, 2026-08-26. Tune with `--say`, not
   # `speaker-test`: a full-scale sine is far harsher than speech and reads as

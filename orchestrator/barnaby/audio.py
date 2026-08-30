@@ -217,9 +217,9 @@ def set_playback_volume(device: str | int | None,
 
     Why this exists at all: ALSA mixer levels live in kernel state on the Pi,
     not in the repo. They are the one piece of tuning that `deploy.sh` could
-    not carry, they do not survive a power cut without `alsactl store`, and a
-    fresh Pi comes up at whatever the hardware defaults to. Setting them from
-    config on every start makes the level version-controlled and self-healing.
+    not carry, they do not survive a power cut, and a fresh Pi comes up at
+    whatever the hardware defaults to. Setting them from config on every start
+    makes the level version-controlled and self-healing.
 
     THE XVF3800 HAS TWO PLAYBACK GAIN STAGES IN SERIES, and `amixer sget PCM`
     shows only the first. The second is `numid=6` ("PCM Playback Volume",

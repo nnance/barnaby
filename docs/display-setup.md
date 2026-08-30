@@ -156,24 +156,16 @@ messages — the symptom is a wall of boot text ending in cloud-init lines like
 `completed socket interaction for stage final`, which reads like an error and
 is not one.
 
-There is a script for this, because `cmdline.txt` is a one-line file where a
-stray newline silently stops the Pi booting. It backs the file up, changes
-`console=tty1` in place rather than appending a second `console=`, and checks
-the line count afterwards:
+`cmdline.txt` is a ONE-LINE file and the kernel drops everything after the
+first newline, so back it up before editing and check the line count after.
+Change the existing `console=tty1` in place rather than appending a second
+`console=` — two both apply and tty1 keeps the panel.
 
-```bash
-./quiet-console.sh && sudo reboot
-```
-
-By hand, it is these flags on that same single line:
+The flags, on that same single line:
 
 ```
 console=tty3 quiet logo.nologo vt.global_cursor_default=0
 ```
-
-Note the file already contains `console=tty1` — **change that one**, don't add
-a second. Two `console=` entries both apply, and the kernel keeps logging to
-tty1, which is the panel.
 
 Full line, for reference — yours will differ in `root=` and `PARTUUID`:
 
